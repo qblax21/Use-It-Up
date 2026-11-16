@@ -89,7 +89,7 @@ async function llmOnce(model, prompt, max, secs, json = false) {
     r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
       method: 'POST', signal: ctl.signal,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, stream: false, ...(json ? { format: 'json' } : {}), messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: 0.5 } })
+      body: JSON.stringify({ model, stream: false, keep_alive: '30m', ...(json ? { format: 'json' } : {}), messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: json ? 0.3 : 0.5 } })
     });
   } catch (e) {
     if (e.name === 'AbortError') { const err = new Error(`${model} took longer than ${secs}s`); err.retry = true; throw err; }
@@ -99,6 +99,14 @@ async function llmOnce(model, prompt, max, secs, json = false) {
   if (!r.ok) { const err = new Error(j.error || ('HTTP ' + r.status)); err.retry = true; throw err; }  // e.g. model missing or out of memory
   lastModel = model;
   return j.message?.content || '';
+}
+// Loads the model into GPU memory in the background so the first real request isn't slow.
+let warmedAt = 0;
+function warm() {
+  if (Date.now() - warmedAt < 5 * 60e3) return;
+  warmedAt = Date.now();
+  const { url, model } = getCfg();
+  fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: '30m' }) }).catch(() => { warmedAt = 0; });
 }
 // Tries the main model; on timeout / out-of-memory / missing model, retries once with the fallback model.
 async function llm(prompt, max = 900, json = false) {
@@ -266,48 +274,151 @@ function matchIngredient(name, list) {
   return list.find(i => phrase.includes(i) && i.length > 3) || null;
 }
 // ---- check AI recipe ingredients against the pantry ----
-const STOP = new Set(['whole','fresh','cooked','leftover','leftovers','sliced','raw','ground','large','small','baby','organic','the','and','with','boneless','skinless','chopped','diced','frozen','canned','extra','virgin','low','fat','free']);
-const STAPLE = /\b(oil|salt|pepper|water|spices?|seasoning|paprika|cumin|oregano|thyme|basil|cinnamon|chili|chilli|herbs?|garlic powder|onion powder)\b/;
-const words = s => s.toLowerCase().replace(/\(.*?\)/g, '').split(/[^a-z]+/).filter(w => w.length > 2 && !STOP.has(w)).map(sing);
+// Matching rules (see README): an ingredient is "in the pantry" only if every meaningful word of it is part of
+// the pantry item's name (so "chicken broth" != "chicken breast"), AND the pantry item's own form/variety words
+// (powder, sauce, almond, peanut…) also appear in the ingredient (so "garlic" != "garlic powder").
+// Exception: an ingredient may name a cut ("chicken thighs") that a generic pantry item ("Chicken") doesn't specify.
+const SYN = [[/\bscallions?\b/g, 'green onion'], [/\bcilantro\b/g, 'coriander'], [/\bcourgettes?\b/g, 'zucchini'], [/\baubergines?\b/g, 'eggplant'],
+  [/\bcapsicums?\b/g, 'bell pepper'], [/\bchilli\b/g, 'chili'], [/\byoghurt\b/g, 'yogurt'], [/\bgarbanzo( beans?)?\b/g, 'chickpea'], [/\b(stock|bouillon)\b/g, 'broth']];
+const STOP = new Set('whole fresh cooked leftover sliced slice raw ground large small baby organic the and with of boneless skinless chopped diced minced shredded grated frozen canned extra virgin low fat free unsalted salted dried cup tbsp tsp tablespoon teaspoon clove pound lb oz ounce pinch handful can package piece dash bunch head stick medium half optional taste some few plain lean thin thick ripe good quality cut bite size little more for serving about any your favorite leaf cubed crushed peeled trimmed halved rinsed drained melted softened beaten quartered torn mashed sifted toasted steamed boiled warm cold finely roughly thinly freshly splash drizzle sprinkle dollop knob'.split(' '));
+const FORM = new Set('powder broth sauce paste juice flour vinegar oil ketchup jam jelly syrup soup puree extract flake cream seasoning mix cube dressing gravy salsa relish starch zest butter'.split(' '));
+const ALT = new Set('almond coconut soy oat peanut cashew hazelnut sweet sour smoked'.split(' '));
+const CUT = new Set('breast thigh wing drumstick leg fillet loin steak chop rib tender tenderloin shoulder belly roast'.split(' '));
+const sing2 = w => /(us|ss|is)$/.test(w) ? w : w === 'leaves' ? 'leaf' : w.replace(/ies$/, 'y').replace(/oes$/, 'o').replace(/(ch|sh|x|z)es$/, '$1').replace(/s$/, '');
+const words = s => { let t = s.toLowerCase().replace(/\(.*?\)/g, ' '); SYN.forEach(([re, to]) => { t = t.replace(re, to); });
+  return t.split(/[^a-z]+/).filter(w => w.length > 2).map(sing2).filter(w => !STOP.has(w)); };
+function itemMatches(ingW, itemName) {
+  const iw = words(itemName); if (!iw.length || !ingW.length) return false;
+  const itemHasCut = iw.some(w => CUT.has(w));
+  if (ingW.some(w => !iw.includes(w) && !(CUT.has(w) && !itemHasCut))) return false;   // unexplained extra word in the ingredient
+  if (iw.some(w => (FORM.has(w) || ALT.has(w)) && !ingW.includes(w))) return false;   // pantry item is a specific form the ingredient doesn't ask for
+  return ingW.some(w => iw.includes(w));
+}
+function isStaple(s) {
+  s = s.toLowerCase();
+  // "pepper" alone / black / white / cracked / ground pepper is a seasoning; bell, chili, ghost… pepper is a vegetable
+  if (/\b(black|white|cracked|ground|cayenne)\s+pepper\b|\bsalt\s*(and|&)\s*pepper\b|\bpepper\s+flakes?\b|^\W*(\d[\d\/. ]*\s*(tsp|tbsp|teaspoons?|tablespoons?|pinch(es)?)?\s*(of\s+)?)?pepper\W*$/.test(s)) return true;
+  return /(^|\W)(oil|salt|water|spices?|seasoning|paprika|cumin|oregano|thyme|basil|cinnamon|cayenne|turmeric|nutmeg|rosemary|herbs?|garlic powder|onion powder|chili powder|chili flakes?)(\W|$)/.test(s);
+}
+const isFresh = i => daysLeft(i.expires) >= 0;
+// -> 'have' | 'expired' | 'staple' | 'similar' (right ingredient, wrong form) | 'missing'
 function checkIngredient(ing) {
   const w = words(ing);
-  const hit = list => list.some(it => { const iw = words(it.name); return iw.some(x => w.includes(x)); });
-  const fresh = items.filter(i => daysLeft(i.expires) >= 0), expired = items.filter(i => daysLeft(i.expires) < 0);
-  if (hit(fresh)) return 'have';
-  if (hit(expired)) return 'expired';
-  if (STAPLE.test(ing.toLowerCase())) return 'staple';
-  return 'missing';
+  if (!w.length) return 'staple';
+  if (items.some(it => isFresh(it) && itemMatches(w, it.name))) return 'have';
+  if (items.some(it => !isFresh(it) && itemMatches(w, it.name))) return 'expired';
+  if (isStaple(ing)) return 'staple';
+  return nearItem(ing) ? 'similar' : 'missing';
 }
-function renderRecipes(data) {
-  const icon = { have: '✅', staple: '🧂', missing: '⚠️', expired: '⛔' };
-  return data.recipes.map(r => {
-    const ings = (r.ingredients || []).map(i => [String(i), checkIngredient(String(i))]);
-    const missing = ings.filter(x => x[1] === 'missing').map(x => x[0]);
+const nearItem = ing => { const w = words(ing); return items.find(it => isFresh(it) && words(it.name).some(x => w.includes(x))) || null; };
+// ---- tolerant parsing of model output ----
+const asList = v => Array.isArray(v) ? v : typeof v === 'string' ? v.split(/\n|;|,(?![^()]*\))/).map(s => s.trim()).filter(Boolean) : [];
+const asText = v => typeof v === 'string' ? v : v && typeof v === 'object' ? (v.name || v.item || v.ingredient || v.text || v.step || v.title || '') : String(v ?? '');
+function parseJSONLoose(text) {
+  if (typeof text !== 'string') return null;
+  let t = text.replace(/```(?:json)?/gi, '').trim();
+  const start = t.search(/[{[]/); if (start < 0) return null;
+  t = t.slice(start);
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  const attempts = [t, end > 0 ? t.slice(0, end + 1) : t];
+  for (const a of attempts) {
+    for (const s of [a, a.replace(/,\s*([}\]])/g, '$1')]) { try { return JSON.parse(s); } catch (e) {} }
+  }
+  // truncated output: salvage every complete {...} object we can find
+  const objs = [], stack = []; let from = -1, inStr = false, skip = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) { if (skip) skip = false; else if (c === '\\') skip = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === '{' || c === '[') { if (c === '{' && stack[stack.length - 1] === '[' && stack.length <= 2) from = i; stack.push(c); }
+    else if (c === '}' || c === ']') {
+      const open = stack.pop();
+      if (open === '{' && from >= 0 && stack[stack.length - 1] === '[' && stack.length <= 2) { try { objs.push(JSON.parse(t.slice(from, i + 1).replace(/,\s*([}\]])/g, '$1'))); } catch (e) {} from = -1; }
+    }
+  }
+  return objs.length ? { recipes: objs } : null;
+}
+// -> [{name, ingredients:[str], steps:[str]}] or null
+function normalizeRecipes(data) {
+  let arr = Array.isArray(data) ? data : null;
+  if (!arr && data && typeof data === 'object') {
+    arr = Object.values(data).find(v => Array.isArray(v) && v.length && v.every(x => x && typeof x === 'object' && !Array.isArray(x)));
+    if (!arr && (data.name || data.title) && (data.ingredients || data.Ingredients)) arr = [data];
+  }
+  if (!arr) return null;
+  const out = arr.map(r => {
+    const get = (...ks) => { for (const k of ks) { const kk = Object.keys(r).find(x => x.toLowerCase() === k); if (kk) return r[kk]; } };
+    const name = asText(get('name', 'title', 'recipe', 'dish', 'meal')).trim();
+    const ingredients = asList(get('ingredients', 'ingredient_list', 'items')).map(x => asText(x).trim()).filter(Boolean);
+    const steps = asList(get('steps', 'instructions', 'directions', 'method')).map(x => asText(x).replace(/^\s*(step\s*)?\d+[.):]\s*/i, '').trim()).filter(Boolean);
+    return { name, ingredients, steps };
+  }).filter(r => r.name && r.ingredients.length);
+  return out.length ? out.slice(0, 4) : null;
+}
+// Asks the model for JSON; if the reply can't be used, retries once with a stricter reminder.
+async function llmJSON(prompt, max, accept) {
+  let lastRaw = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await llm(attempt ? prompt + '\n\nIMPORTANT: your previous reply was not valid. Reply with ONLY the JSON object in the exact shape above — no other text.' : prompt, max, true);
+    lastRaw = raw;
+    const val = accept(parseJSONLoose(raw));
+    if (val) return { val, retried: attempt > 0, raw };
+  }
+  const err = new Error('The AI returned an unusable reply twice.'); err.raw = lastRaw; throw err;
+}
+const acceptSteps = d => { const s = asList(d && !Array.isArray(d) ? (d.steps || d.instructions || d.directions) : d).map(x => asText(x).replace(/^\s*(step\s*)?\d+[.):]\s*/i, '').trim()).filter(Boolean); return s.length ? s.slice(0, 8) : null; };
+
+// Only fresh items are listed (expired ones are left out so the model isn't tempted); stage 1 asks for names + ingredients only.
+function recipePrompt() {
+  const lines = items.filter(isFresh).sort((a, b) => a.expires.localeCompare(b.expires))
+    .map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires)} days left`).join('\n');
+  return `Pantry (soonest-expiring first):\n${lines}\n\nSuggest 3 simple meals that use the soonest-expiring items. For a cooked leftover, suggest how to reheat or repurpose it. STRICT RULE: ingredients may only be pantry items above plus oil, salt, pepper, water and common spices — never add anything else (no eggs, onions, cheese, etc. unless listed).\n\nReply with JSON only: {"recipes":[{"name":"...","ingredients":["every ingredient, including staples"]}]}`;
+}
+let aiRecipes = [];
+function renderRecipes() {
+  const icon = { have: '✅', staple: '🧂', similar: '⚠️', missing: '⚠️', expired: '⛔' };
+  return aiRecipes.map((r, idx) => {
+    const ings = r.ingredients.map(i => [i, checkIngredient(i)]);
+    const need = ings.filter(x => x[1] === 'missing' || x[1] === 'similar').map(([n, s]) => { const near = s === 'similar' && nearItem(n); return near ? `${n} (you have “${near.name}”, but a different form)` : n; });
     const expired = ings.filter(x => x[1] === 'expired').map(x => x[0]);
-    return `<div class="card"><b>${esc(r.name || 'Recipe')}</b>
-      ${missing.length ? `<div class="banner">⚠️ Not on your list — you'd need to buy: <b>${missing.map(esc).join(', ')}</b></div>` : expired.length ? '' : '<div class="muted" style="margin:6px 0">✅ Everything is in your pantry (plus basic staples).</div>'}
+    return `<div class="card"><b>${esc(r.name)}</b>
+      ${need.length ? `<div class="banner">⚠️ Not on your list — you'd need: <b>${need.map(esc).join('; ')}</b></div>` : expired.length ? '' : '<div class="muted" style="margin:6px 0">✅ Everything is in your pantry (plus basic staples).</div>'}
       ${expired.length ? `<div class="banner" style="background:#f8d7da;color:#721c24">⛔ Uses expired item: <b>${expired.map(esc).join(', ')}</b> — don't use it.</div>` : ''}
       <div class="muted">${ings.map(([n, s]) => `${icon[s]} ${esc(n)}`).join(' · ')}</div>
-      <ol style="margin:8px 0 0 18px;padding:0">${(r.steps || []).map(s => `<li>${esc(String(s).replace(/^\s*\d+[.)]\s*/, ''))}</li>`).join('')}</ol></div>`;
+      <div data-steps="${idx}">${r.steps && r.steps.length
+        ? `<ol style="margin:8px 0 0 18px;padding:0">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`
+        : `<button class="b alt sm" style="margin-top:8px" data-getsteps="${idx}">Show steps</button>`}</div></div>`;
   }).join('') + `<div class="muted">✅ in pantry · 🧂 basic staple · ⚠️ not on your list · ⛔ expired</div>`;
 }
+async function getSteps(idx) {
+  const r = aiRecipes[idx], box = document.querySelector(`[data-steps="${idx}"]`);
+  box.innerHTML = '<span class="muted">Writing steps…</span>';
+  try {
+    const { val } = await llmJSON(`Recipe: ${r.name}\nIngredients: ${r.ingredients.join(', ')}\n\nWrite 4 to 6 short numbered cooking steps using ONLY those ingredients. Reply with JSON only: {"steps":["...","..."]}`, 500, acceptSteps);
+    r.steps = val;
+  } catch (e) { box.innerHTML = `<span class="muted">Couldn't write steps (${esc(e.message)}). </span><button class="b alt sm" data-getsteps="${idx}">Try again</button>`; wireSteps(); return; }
+  $('aiout').innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`; wireSteps();
+}
+const wireSteps = () => document.querySelectorAll('[data-getsteps]').forEach(b => b.onclick = () => getSteps(+b.dataset.getsteps));
 const md = s =>esc(s).replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
 async function viewRecipes() {
   const food = items.filter(i => !i.leftover).sort((a, b) => a.expires.localeCompare(b.expires));
   if (!food.length) { main.innerHTML = '<p class="muted">Add some groceries first, then I\'ll suggest recipes. (Leftovers are skipped — just eat those!)</p>'; return; }
   main.innerHTML = `<div class="card"><button class="b" id="ai" style="width:100%">✨ Ask my AI for ideas using everything I have</button><div id="aiout" class="ai" style="margin-top:10px"></div></div><div id="rlist"><p class="muted">Finding recipes…</p></div>`;
+  warm();   // start loading the model now so the button feels instant
   $('ai').onclick = async () => {
-    const out = $('aiout'); out.textContent = 'Thinking…';
-    const lines = items.map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires) < 0 ? 'EXPIRED' : daysLeft(i.expires) + ' days left'}`).join('\n');
+    const out = $('aiout');
+    if (!items.some(isFresh)) { out.textContent = 'Everything in your pantry has expired — nothing safe to cook with.'; return; }
+    out.textContent = 'Thinking…';
     try {
-      const t = await llm(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first. For cooked leftovers, just suggest how to eat or repurpose them. Do not use anything marked EXPIRED. STRICT RULE: the only ingredients allowed are the items in my list plus oil, salt, pepper, water and common spices — never invent other ingredients (no eggs, onions, mushrooms, etc. unless listed).\n\nReply with JSON only, in exactly this shape: {"recipes":[{"name":"...","ingredients":["every ingredient used, including staples"],"steps":["short step","..."]}]}`, 1500, true);
-      let data = null;
-      try { data = JSON.parse(t); } catch (e) {}
-      out.innerHTML = Array.isArray(data?.recipes) && data.recipes.length
-        ? renderRecipes(data) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`
-        : md(t) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)} (couldn't check ingredients this time; try again)</div>`;
-    } catch (e) { out.textContent = 'AI error: ' + e.message; }
+      const t0 = performance.now();
+      const { val, retried } = await llmJSON(recipePrompt(), 400, normalizeRecipes);
+      aiRecipes = val; window.lastRecipeStats = { secs: (performance.now() - t0) / 1000, retried };
+      out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}</div>`; wireSteps();
+    } catch (e) {
+      out.innerHTML = `${esc(e.message)} ${e.raw ? '<details><summary class="muted">Show raw reply</summary><div class="ai muted">' + md(e.raw) + '</div></details>' : ''}`;
+    }
   };
   try {
     const list = await getIngredients();

@@ -3,6 +3,19 @@
 Track groceries and leftovers, get reminded before they expire, and get recipe ideas.
 Live: https://qblax21.github.io/Use-It-Up/
 
+## How AI recipes are checked
+
+Every ingredient the AI proposes is compared with your pantry:
+an ingredient counts as "in your pantry" only if all its meaningful words appear in the pantry item's name
+(so *chicken broth* ≠ *chicken breast*), and the pantry item's own form/variety words (*powder, sauce, almond, peanut…*)
+also appear in the ingredient (so *garlic* ≠ *garlic powder*). A generic pantry item (*Chicken*) still satisfies a specific
+cut (*chicken thighs*). Look-alikes show as ⚠️ with "you have X, but a different form". Expired items are never offered to
+the AI, and any expired item that slips into a recipe is flagged ⛔.
+
+Recipes load in two steps: names + ingredients first (about 3 s), then **Show steps** per recipe on demand.
+The model is pre-loaded when you open the Recipes tab. If the AI's reply isn't usable JSON the app tolerates common
+formatting slips and otherwise retries once automatically.
+
 ## AI helper (optional, runs on your PC)
 
 Recipe ideas and shelf-life estimates use [Ollama](https://ollama.com) on your own computer.
