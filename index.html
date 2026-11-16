@@ -61,7 +61,7 @@ const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'nul
 const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 let items = load(KEY, []), hist = load(HKEY, []);
 const save = () => { put(KEY, items); put(HKEY, hist); };
-const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:7b', ...load(CKEY, {}) });
+const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:14b', fallback: 'qwen2.5:7b', timeout: 90, ...load(CKEY, {}) });
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // ---------- dates ----------
@@ -80,19 +80,34 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const $ = id => document.getElementById(id);
 
 // ---------- Local AI (Ollama running on your own PC) ----------
-async function llm(prompt, max = 900) {
-  const { url, model } = getCfg();
+let lastModel = '';
+async function llmOnce(model, prompt, max, secs) {
+  const { url } = getCfg();
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), secs * 1000);
   let r;
   try {
     r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
-      method: 'POST',
+      method: 'POST', signal: ctl.signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: 0.5 } })
     });
-  } catch (e) { throw new Error(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`); }
+  } catch (e) {
+    if (e.name === 'AbortError') { const err = new Error(`${model} took longer than ${secs}s`); err.retry = true; throw err; }
+    const err = new Error(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`); err.fatal = true; throw err;
+  } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  if (!r.ok) { const err = new Error(j.error || ('HTTP ' + r.status)); err.retry = true; throw err; }  // e.g. model missing or out of memory
+  lastModel = model;
   return j.message?.content || '';
+}
+// Tries the main model; on timeout / out-of-memory / missing model, retries once with the fallback model.
+async function llm(prompt, max = 900) {
+  const { model, fallback, timeout } = getCfg();
+  try { return await llmOnce(model, prompt, max, timeout); }
+  catch (e) {
+    if (!e.retry || !fallback || fallback === model) throw e;
+    return await llmOnce(fallback, prompt, max, timeout).catch(e2 => { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); });
+  }
 }
 
 // ---------- views ----------
@@ -200,7 +215,7 @@ function viewAdd() {
       const t = await llm(`How many days will "${draft.name}" stay safe to eat ${draft.leftover ? 'as a cooked leftover in the fridge' : 'when bought fresh and stored properly (in the fridge if it needs it)'}? Be conservative. Reply with only a whole number of days, nothing else.`, 20);
       const n = parseInt(t.match(/\d+/)?.[0], 10);
       if (!n || n > 400) throw new Error('No clear answer');
-      $('exp').value = draft.expires = addDays(n); $('msg').textContent = `Estimate: about ${n} days. Adjust if the package says otherwise.`;
+      $('exp').value = draft.expires = addDays(n); $('msg').textContent = `Estimate: about ${n} days (${lastModel}). Adjust if the package says otherwise.`;
     } catch (e) { $('msg').textContent = 'AI error: ' + e.message; }
   };
   $('save').onclick = () => {
@@ -261,7 +276,7 @@ async function viewRecipes() {
     const lines = items.map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires) < 0 ? 'EXPIRED' : daysLeft(i.expires) + ' days left'}`).join('\n');
     try {
       const t = await llm(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first (assume basic pantry staples like oil, salt, pepper). For each: a **bold** name, which of my items it uses, and short numbered steps. For cooked leftovers, just suggest how to eat or repurpose them. Do not use anything marked EXPIRED. STRICT RULE: the only ingredients allowed are the items in my list plus oil, salt, pepper, water and common spices — never invent other ingredients (no mushrooms, onions, etc. unless listed). Keep it concise.`, 1200);
-      out.innerHTML = md(t);
+      out.innerHTML = md(t) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`;
     } catch (e) { out.textContent = 'AI error: ' + e.message; }
   };
   try {
@@ -296,7 +311,9 @@ function viewMore() {
   <div class="card"><b>AI helper (Ollama on your PC)</b>
     <p class="muted">Tailored recipes and shelf-life estimates run on your own computer — nothing leaves your network and there's no key. On the PC itself the default address works. On a phone, enter your PC's address (see the README).</p>
     <label>Ollama address</label><input id="curl" value="${esc(getCfg().url)}" autocapitalize="off" autocorrect="off">
-    <label>Model</label><input id="cmodel" list="models" value="${esc(getCfg().model)}" autocapitalize="off" autocorrect="off"><datalist id="models"></datalist>
+    <label>Main model</label><input id="cmodel" list="models" value="${esc(getCfg().model)}" autocapitalize="off" autocorrect="off"><datalist id="models"></datalist>
+    <label>Fallback model (used if the main one is slow, out of memory or missing)</label><input id="cfall" list="models" value="${esc(getCfg().fallback)}" autocapitalize="off" autocorrect="off">
+    <label>Switch to fallback after (seconds)</label><input id="ctime" type="number" min="10" max="600" value="${getCfg().timeout}">
     <div class="row"><button class="b" id="csave">Save &amp; test</button><button class="b alt" id="creset">Reset</button></div>
     <div id="kmsg" class="muted"></div>
   </div>
@@ -305,13 +322,15 @@ function viewMore() {
     <button class="b alt" id="notif">Enable notifications</button>
   </div>`;
   $('csave').onclick = async () => {
-    const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:7b';
-    put(CKEY, { url, model }); $('kmsg').textContent = 'Testing…';
+    const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:14b';
+    const fallback = $('cfall').value.trim(), timeout = Math.max(10, +$('ctime').value || 90);
+    put(CKEY, { url, model, fallback, timeout }); $('kmsg').textContent = 'Testing…';
     try {
       const j = await (await fetch(url.replace(/\/+$/, '') + '/api/tags')).json();
       const names = (j.models || []).map(m => m.name);
       $('models').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
-      $('kmsg').textContent = names.includes(model) ? `Connected ✓ — ${model} is available.` : `Connected, but "${model}" isn't installed. Installed: ${names.join(', ') || 'none'}`;
+      const miss = [model, fallback].filter(m => m && !names.includes(m));
+      $('kmsg').textContent = miss.length ? `Connected, but not installed: ${miss.join(', ')}. Installed: ${names.join(', ') || 'none'}` : `Connected ✓ — ${model}${fallback ? ' (fallback ' + fallback + ')' : ''} ready.`;
     } catch (e) { $('kmsg').textContent = `Can't reach Ollama at ${url}.`; }
   };
   $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
