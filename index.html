@@ -56,12 +56,12 @@ video{width:100%;border-radius:12px;background:#000}
 
 <script>
 // ---------- storage ----------
-const KEY = 'useitup.items.v1', HKEY = 'useitup.hist.v1', AKEY = 'useitup.apikey';
+const KEY = 'useitup.items.v1', HKEY = 'useitup.hist.v1', CKEY = 'useitup.llm';
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } };
 const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 let items = load(KEY, []), hist = load(HKEY, []);
 const save = () => { put(KEY, items); put(HKEY, hist); };
-const getKey = () => { try { return localStorage.getItem(AKEY) || ''; } catch (e) { return ''; } };
+const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:7b', ...load(CKEY, {}) });
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // ---------- dates ----------
@@ -79,18 +79,20 @@ function badge(iso) {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const $ = id => document.getElementById(id);
 
-// ---------- Claude (optional, user's own key) ----------
-async function claude(prompt, max = 900) {
-  const key = getKey();
-  if (!key) throw new Error('Add your Claude API key under More first.');
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: max, messages: [{ role: 'user', content: prompt }] })
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || ('HTTP ' + r.status));
-  return j.content.map(c => c.text || '').join('');
+// ---------- Local AI (Ollama running on your own PC) ----------
+async function llm(prompt, max = 900) {
+  const { url, model } = getCfg();
+  let r;
+  try {
+    r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: 0.5 } })
+    });
+  } catch (e) { throw new Error(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j.message?.content || '';
 }
 
 // ---------- views ----------
@@ -169,7 +171,6 @@ async function startScan() {
 }
 
 function viewAdd() {
-  const hasKey = !!getKey();
   main.innerHTML = `
   <div class="card">
     <div class="row"><button class="b" id="scan">📷 Scan barcode</button>
@@ -184,7 +185,7 @@ function viewAdd() {
     <div class="row">
       ${[['+2d',2],['+1w',7],['+2w',14],['+1mo',30]].map(([l,n]) => `<button class="b alt" data-q="${n}">${l}</button>`).join('')}
     </div>
-    ${hasKey ? '<button class="b alt" id="est" style="width:100%">✨ Ask Claude how long it keeps</button>' : ''}
+    <button class="b alt" id="est" style="width:100%">✨ Ask my AI how long it keeps</button>
     <button class="b" id="save" style="width:100%;margin-top:8px">Save to pantry</button>
   </div>`;
   const sync = () => { draft.name = $('name').value; draft.qty = $('qty').value; draft.expires = $('exp').value; draft.barcode = $('code').value; };
@@ -192,15 +193,15 @@ function viewAdd() {
   $('left').onclick = () => { sync(); draft.leftover = true; draft.expires = addDays(4); if (!draft.name) draft.name = 'Leftovers: '; viewAdd(); $('name').focus(); };
   $('look').onclick = () => { sync(); lookup(draft.barcode); };
   $('scan').onclick = startScan;
-  if (hasKey) $('est').onclick = async () => {
+  $('est').onclick = async () => {
     sync(); if (!draft.name.trim()) { $('msg').textContent = 'Enter a name first.'; return; }
-    $('msg').textContent = 'Asking Claude…';
+    $('msg').textContent = 'Asking your AI…';
     try {
-      const t = await claude(`How many days will "${draft.name}" stay good ${draft.leftover ? 'as a cooked leftover in the fridge' : 'when bought fresh and stored properly (fridge if it needs it)'}? Reply with only a whole number of days.`, 20);
+      const t = await llm(`How many days will "${draft.name}" stay safe to eat ${draft.leftover ? 'as a cooked leftover in the fridge' : 'when bought fresh and stored properly (in the fridge if it needs it)'}? Be conservative. Reply with only a whole number of days, nothing else.`, 20);
       const n = parseInt(t.match(/\d+/)?.[0], 10);
-      if (!n) throw new Error('No answer');
-      $('exp').value = draft.expires = addDays(n); $('msg').textContent = `Claude says about ${n} days. Adjust if the package says otherwise.`;
-    } catch (e) { $('msg').textContent = 'Claude error: ' + e.message; }
+      if (!n || n > 400) throw new Error('No clear answer');
+      $('exp').value = draft.expires = addDays(n); $('msg').textContent = `Estimate: about ${n} days. Adjust if the package says otherwise.`;
+    } catch (e) { $('msg').textContent = 'AI error: ' + e.message; }
   };
   $('save').onclick = () => {
     sync();
@@ -249,22 +250,19 @@ function matchIngredient(name, list) {
   const phrase = words.join(' ');
   return list.find(i => phrase.includes(i) && i.length > 3) || null;
 }
-const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+const md = s => esc(s).replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
 async function viewRecipes() {
   const food = items.filter(i => !i.leftover).sort((a, b) => a.expires.localeCompare(b.expires));
   if (!food.length) { main.innerHTML = '<p class="muted">Add some groceries first, then I\'ll suggest recipes. (Leftovers are skipped — just eat those!)</p>'; return; }
-  const hasKey = !!getKey();
-  main.innerHTML = `<div class="card">${hasKey
-    ? '<button class="b" id="ai" style="width:100%">✨ Ask Claude for ideas using everything I have</button><div id="aiout" class="ai" style="margin-top:10px"></div>'
-    : '<span class="muted">Tip: add a Claude API key under <b>More</b> to get tailored recipe ideas using all your items.</span>'}</div><div id="rlist"><p class="muted">Finding recipes…</p></div>`;
-  if (hasKey) $('ai').onclick = async () => {
+  main.innerHTML = `<div class="card"><button class="b" id="ai" style="width:100%">✨ Ask my AI for ideas using everything I have</button><div id="aiout" class="ai" style="margin-top:10px"></div></div><div id="rlist"><p class="muted">Finding recipes…</p></div>`;
+  $('ai').onclick = async () => {
     const out = $('aiout'); out.textContent = 'Thinking…';
     const lines = items.map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires) < 0 ? 'EXPIRED' : daysLeft(i.expires) + ' days left'}`).join('\n');
     try {
-      const t = await claude(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first (assume basic pantry staples like oil, salt, pepper). Say which of my items each uses, and give short numbered steps. For cooked leftovers, just suggest how to eat or repurpose them. Skip anything marked EXPIRED and warn me not to eat it if it's risky. Keep it concise. Use **bold** for recipe names.`, 1200);
+      const t = await llm(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first (assume basic pantry staples like oil, salt, pepper). For each: a **bold** name, which of my items it uses, and short numbered steps. For cooked leftovers, just suggest how to eat or repurpose them. Do not use anything marked EXPIRED. STRICT RULE: the only ingredients allowed are the items in my list plus oil, salt, pepper, water and common spices — never invent other ingredients (no mushrooms, onions, etc. unless listed). Keep it concise.`, 1200);
       out.innerHTML = md(t);
-    } catch (e) { out.textContent = 'Claude error: ' + e.message; }
+    } catch (e) { out.textContent = 'AI error: ' + e.message; }
   };
   try {
     const list = await getIngredients();
@@ -295,18 +293,28 @@ function viewMore() {
     <p>😋 Used up: <b>${ate}</b> &nbsp; 🗑️ Wasted: <b>${tossed}</b></p>
     ${last.length ? '<div class="muted">' + last.map(h => `${h.outcome === 'ate' ? '😋' : '🗑️'} ${esc(h.name)} <span>(${h.date})</span>`).join('<br>') + '</div>' : '<span class="muted">Nothing logged yet.</span>'}
   </div>
-  <div class="card"><b>Claude features (optional)</b>
-    <p class="muted">Paste your own Claude API key to get tailored recipes and shelf-life estimates. It's stored only in this browser and sent only to Anthropic. Anyone using this device could read it, so don't use a key with a big spending limit.</p>
-    <input id="key" type="password" placeholder="sk-ant-…" value="${esc(getKey())}" autocomplete="off">
-    <div class="row"><button class="b" id="ksave">Save key</button><button class="b alt" id="kclear">Remove key</button></div>
+  <div class="card"><b>AI helper (Ollama on your PC)</b>
+    <p class="muted">Tailored recipes and shelf-life estimates run on your own computer — nothing leaves your network and there's no key. On the PC itself the default address works. On a phone, enter your PC's address (see the README).</p>
+    <label>Ollama address</label><input id="curl" value="${esc(getCfg().url)}" autocapitalize="off" autocorrect="off">
+    <label>Model</label><input id="cmodel" list="models" value="${esc(getCfg().model)}" autocapitalize="off" autocorrect="off"><datalist id="models"></datalist>
+    <div class="row"><button class="b" id="csave">Save &amp; test</button><button class="b alt" id="creset">Reset</button></div>
     <div id="kmsg" class="muted"></div>
   </div>
   <div class="card"><b>Reminders</b>
     <p class="muted">Get a notification when something expires within a day (shown when you open the app).</p>
     <button class="b alt" id="notif">Enable notifications</button>
   </div>`;
-  $('ksave').onclick = () => { try { localStorage.setItem(AKEY, $('key').value.trim()); $('kmsg').textContent = 'Saved.'; } catch (e) { $('kmsg').textContent = 'Could not save.'; } };
-  $('kclear').onclick = () => { try { localStorage.removeItem(AKEY); } catch (e) {} $('key').value = ''; $('kmsg').textContent = 'Removed.'; };
+  $('csave').onclick = async () => {
+    const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:7b';
+    put(CKEY, { url, model }); $('kmsg').textContent = 'Testing…';
+    try {
+      const j = await (await fetch(url.replace(/\/+$/, '') + '/api/tags')).json();
+      const names = (j.models || []).map(m => m.name);
+      $('models').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+      $('kmsg').textContent = names.includes(model) ? `Connected ✓ — ${model} is available.` : `Connected, but "${model}" isn't installed. Installed: ${names.join(', ') || 'none'}`;
+    } catch (e) { $('kmsg').textContent = `Can't reach Ollama at ${url}.`; }
+  };
+  $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
   $('notif').onclick = async () => {
     if (!('Notification' in window)) { $('notif').textContent = 'Not supported here'; return; }
     const p = await Notification.requestPermission(); $('notif').textContent = p === 'granted' ? 'Enabled ✓' : 'Blocked in browser settings';
