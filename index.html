@@ -81,7 +81,7 @@ const $ = id => document.getElementById(id);
 
 // ---------- Local AI (Ollama running on your own PC) ----------
 let lastModel = '';
-async function llmOnce(model, prompt, max, secs) {
+async function llmOnce(model, prompt, max, secs, json = false) {
   const { url } = getCfg();
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), secs * 1000);
   let r;
@@ -89,7 +89,7 @@ async function llmOnce(model, prompt, max, secs) {
     r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
       method: 'POST', signal: ctl.signal,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: 0.5 } })
+      body: JSON.stringify({ model, stream: false, ...(json ? { format: 'json' } : {}), messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: 0.5 } })
     });
   } catch (e) {
     if (e.name === 'AbortError') { const err = new Error(`${model} took longer than ${secs}s`); err.retry = true; throw err; }
@@ -101,12 +101,12 @@ async function llmOnce(model, prompt, max, secs) {
   return j.message?.content || '';
 }
 // Tries the main model; on timeout / out-of-memory / missing model, retries once with the fallback model.
-async function llm(prompt, max = 900) {
+async function llm(prompt, max = 900, json = false) {
   const { model, fallback, timeout } = getCfg();
-  try { return await llmOnce(model, prompt, max, timeout); }
+  try { return await llmOnce(model, prompt, max, timeout, json); }
   catch (e) {
     if (!e.retry || !fallback || fallback === model) throw e;
-    return await llmOnce(fallback, prompt, max, timeout).catch(e2 => { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); });
+    return await llmOnce(fallback, prompt, max, timeout, json).catch(e2 => { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); });
   }
 }
 
@@ -265,7 +265,33 @@ function matchIngredient(name, list) {
   const phrase = words.join(' ');
   return list.find(i => phrase.includes(i) && i.length > 3) || null;
 }
-const md = s => esc(s).replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+// ---- check AI recipe ingredients against the pantry ----
+const STOP = new Set(['whole','fresh','cooked','leftover','leftovers','sliced','raw','ground','large','small','baby','organic','the','and','with','boneless','skinless','chopped','diced','frozen','canned','extra','virgin','low','fat','free']);
+const STAPLE = /\b(oil|salt|pepper|water|spices?|seasoning|paprika|cumin|oregano|thyme|basil|cinnamon|chili|chilli|herbs?|garlic powder|onion powder)\b/;
+const words = s => s.toLowerCase().replace(/\(.*?\)/g, '').split(/[^a-z]+/).filter(w => w.length > 2 && !STOP.has(w)).map(sing);
+function checkIngredient(ing) {
+  const w = words(ing);
+  const hit = list => list.some(it => { const iw = words(it.name); return iw.some(x => w.includes(x)); });
+  const fresh = items.filter(i => daysLeft(i.expires) >= 0), expired = items.filter(i => daysLeft(i.expires) < 0);
+  if (hit(fresh)) return 'have';
+  if (hit(expired)) return 'expired';
+  if (STAPLE.test(ing.toLowerCase())) return 'staple';
+  return 'missing';
+}
+function renderRecipes(data) {
+  const icon = { have: '✅', staple: '🧂', missing: '⚠️', expired: '⛔' };
+  return data.recipes.map(r => {
+    const ings = (r.ingredients || []).map(i => [String(i), checkIngredient(String(i))]);
+    const missing = ings.filter(x => x[1] === 'missing').map(x => x[0]);
+    const expired = ings.filter(x => x[1] === 'expired').map(x => x[0]);
+    return `<div class="card"><b>${esc(r.name || 'Recipe')}</b>
+      ${missing.length ? `<div class="banner">⚠️ Not on your list — you'd need to buy: <b>${missing.map(esc).join(', ')}</b></div>` : expired.length ? '' : '<div class="muted" style="margin:6px 0">✅ Everything is in your pantry (plus basic staples).</div>'}
+      ${expired.length ? `<div class="banner" style="background:#f8d7da;color:#721c24">⛔ Uses expired item: <b>${expired.map(esc).join(', ')}</b> — don't use it.</div>` : ''}
+      <div class="muted">${ings.map(([n, s]) => `${icon[s]} ${esc(n)}`).join(' · ')}</div>
+      <ol style="margin:8px 0 0 18px;padding:0">${(r.steps || []).map(s => `<li>${esc(String(s).replace(/^\s*\d+[.)]\s*/, ''))}</li>`).join('')}</ol></div>`;
+  }).join('') + `<div class="muted">✅ in pantry · 🧂 basic staple · ⚠️ not on your list · ⛔ expired</div>`;
+}
+const md = s =>esc(s).replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
 async function viewRecipes() {
   const food = items.filter(i => !i.leftover).sort((a, b) => a.expires.localeCompare(b.expires));
@@ -275,8 +301,12 @@ async function viewRecipes() {
     const out = $('aiout'); out.textContent = 'Thinking…';
     const lines = items.map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires) < 0 ? 'EXPIRED' : daysLeft(i.expires) + ' days left'}`).join('\n');
     try {
-      const t = await llm(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first (assume basic pantry staples like oil, salt, pepper). For each: a **bold** name, which of my items it uses, and short numbered steps. For cooked leftovers, just suggest how to eat or repurpose them. Do not use anything marked EXPIRED. STRICT RULE: the only ingredients allowed are the items in my list plus oil, salt, pepper, water and common spices — never invent other ingredients (no mushrooms, onions, etc. unless listed). Keep it concise.`, 1200);
-      out.innerHTML = md(t) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`;
+      const t = await llm(`My kitchen inventory:\n${lines}\n\nSuggest 3 simple recipes or meals that use the items expiring soonest first. For cooked leftovers, just suggest how to eat or repurpose them. Do not use anything marked EXPIRED. STRICT RULE: the only ingredients allowed are the items in my list plus oil, salt, pepper, water and common spices — never invent other ingredients (no eggs, onions, mushrooms, etc. unless listed).\n\nReply with JSON only, in exactly this shape: {"recipes":[{"name":"...","ingredients":["every ingredient used, including staples"],"steps":["short step","..."]}]}`, 1500, true);
+      let data = null;
+      try { data = JSON.parse(t); } catch (e) {}
+      out.innerHTML = Array.isArray(data?.recipes) && data.recipes.length
+        ? renderRecipes(data) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`
+        : md(t) + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)} (couldn't check ingredients this time; try again)</div>`;
     } catch (e) { out.textContent = 'AI error: ' + e.message; }
   };
   try {
