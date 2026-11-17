@@ -28,8 +28,16 @@ timeout (90 s by default), the app retries once with the fallback. All of these 
 
 **On your phone** the page is HTTPS, so it can only call another HTTPS address. Easiest way:
 
-1. Install [Tailscale](https://tailscale.com) on the PC and the phone (same account).
-2. On the PC run: `tailscale serve --bg --https=443 http://localhost:11434`
-3. In the app's **More** tab set the Ollama address to `https://<your-pc>.<tailnet>.ts.net`.
+1. Install [Tailscale](https://tailscale.com) on the PC and the phone (same account) and turn on HTTPS certificates
+   for the tailnet.
+2. Ollama refuses requests that arrive under a `*.ts.net` hostname (HTTP 403), so run the tiny loopback-only proxy
+   in `tools/ollama-proxy.py`, which rewrites the Host header:
+   `pythonw tools/ollama-proxy.py 11436 11434` (listen port, Ollama port). To start it at login on Windows, put a
+   `.vbs` file in your Startup folder that runs that command.
+3. Point Tailscale at the proxy. Use a **path** so you don't overwrite anything you already serve on :443:
+   `tailscale serve --bg --set-path /ollama http://127.0.0.1:11436`
+4. In the app's **More** tab set the Ollama address to `https://<your-pc>.<tailnet>.ts.net/ollama` and tap
+   **Save & test**.
 
-Without this, everything else (pantry, scanning, TheMealDB recipes) still works on the phone.
+The PC must be on and awake, and the Tailscale app must be connected on the phone.
+Without any of this, everything else (pantry, scanning, TheMealDB recipes) still works on the phone.
