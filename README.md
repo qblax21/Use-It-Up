@@ -32,8 +32,9 @@ timeout (90 s by default), the app retries once with the fallback. All of these 
    for the tailnet.
 2. Ollama refuses requests that arrive under a `*.ts.net` hostname (HTTP 403), so run the tiny loopback-only proxy
    in `tools/ollama-proxy.py`, which rewrites the Host header:
-   `pythonw tools/ollama-proxy.py 11436 11434` (listen port, Ollama port). To start it at login on Windows, put a
-   `.vbs` file in your Startup folder that runs that command.
+   `pythonw tools/ollama-proxy.py 11436 11434` (listen port, Ollama port). On Windows, run
+   `powershell -ExecutionPolicy Bypass -File tools\install-proxy-autostart.ps1` once: it copies the proxy to
+   `%LOCALAPPDATA%\UseItUp`, starts it at every login and restarts it within ~5 s if it ever stops.
 3. Point Tailscale at the proxy. Use a **path** so you don't overwrite anything you already serve on :443:
    `tailscale serve --bg --set-path /ollama http://127.0.0.1:11436`
 4. In the app's **More** tab set the Ollama address to `https://<your-pc>.<tailnet>.ts.net/ollama` and tap

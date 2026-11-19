@@ -80,6 +80,31 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const $ = id => document.getElementById(id);
 
 // ---------- Local AI (Ollama running on your own PC) ----------
+// Works out *why* Ollama can't be used, from the HTTP status (or lack of one), so the message says what to fix.
+const HINTS = {
+  network: "This device couldn't reach your PC. Check that Tailscale is switched ON on this device, the PC is on and awake, and the address is exactly https://<pc>.<tailnet>.ts.net/ollama.",
+  'proxy-down': "Your PC answered (HTTP %s) but nothing is behind that address — the Use-It-Up proxy or Ollama isn't running. On the PC, start Ollama and run tools\\install-proxy-autostart.ps1.",
+  'host-rejected': "Ollama refused the hostname (HTTP 403). The Tailscale route is pointing straight at Ollama; point it at the proxy: tailscale serve --bg --set-path /ollama http://127.0.0.1:11436",
+  'wrong-path': "Reached a server, but not Ollama at that path (HTTP 404). The address should end in /ollama.",
+  auth: "That address asks for a login (HTTP %s) — it's a different app than Ollama.",
+  'not-ollama': "Reached something that isn't Ollama (the reply wasn't Ollama's model list).",
+  http: "Unexpected reply from the server (HTTP %s)."
+};
+async function pingOllama(url, ms = 8000) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url.replace(/\/+$/, '') + '/api/tags', { signal: ctl.signal });
+    const s = r.status;
+    if (s === 200) {
+      const j = await r.json().catch(() => null);
+      return Array.isArray(j?.models) ? { ok: true, kind: 'ok', status: s, models: j.models.map(m => m.name) } : { ok: false, kind: 'not-ollama', status: s, hint: HINTS['not-ollama'] };
+    }
+    const kind = [502, 503, 504].includes(s) ? 'proxy-down' : s === 403 ? 'host-rejected' : s === 404 ? 'wrong-path' : [401, 407].includes(s) ? 'auth' : 'http';
+    return { ok: false, kind, status: s, hint: HINTS[kind].replace('%s', s) };
+  } catch (e) {
+    return { ok: false, kind: 'network', status: 0, hint: HINTS.network, timedOut: e.name === 'AbortError' };
+  } finally { clearTimeout(timer); }
+}
 let lastModel = '';
 async function llmOnce(model, prompt, max, secs, json = false) {
   const { url } = getCfg();
@@ -96,7 +121,11 @@ async function llmOnce(model, prompt, max, secs, json = false) {
     const err = new Error(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`); err.fatal = true; throw err;
   } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const err = new Error(j.error || ('HTTP ' + r.status)); err.retry = true; throw err; }  // e.g. model missing or out of memory
+  if (!r.ok) {   // e.g. model missing or out of memory (Ollama sends {error}); 502/504 means the proxy/Ollama is down
+    const err = new Error(j.error || (HINTS[[502, 503, 504].includes(r.status) ? 'proxy-down' : r.status === 403 ? 'host-rejected' : 'http'] || '').replace('%s', r.status) || ('HTTP ' + r.status));
+    err.retry = ![502, 503, 504, 403].includes(r.status);   // the fallback model would hit the same dead end
+    err.status = r.status; throw err;
+  }
   lastModel = model;
   return j.message?.content || '';
 }
@@ -466,13 +495,12 @@ function viewMore() {
     const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:14b';
     const fallback = $('cfall').value.trim(), timeout = Math.max(10, +$('ctime').value || 90);
     put(CKEY, { url, model, fallback, timeout }); $('kmsg').textContent = 'Testing…';
-    try {
-      const j = await (await fetch(url.replace(/\/+$/, '') + '/api/tags')).json();
-      const names = (j.models || []).map(m => m.name);
-      $('models').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
-      const miss = [model, fallback].filter(m => m && !names.includes(m));
-      $('kmsg').textContent = miss.length ? `Connected, but not installed: ${miss.join(', ')}. Installed: ${names.join(', ') || 'none'}` : `Connected ✓ — ${model}${fallback ? ' (fallback ' + fallback + ')' : ''} ready.`;
-    } catch (e) { $('kmsg').textContent = `Can't reach Ollama at ${url}.`; }
+    const p = await pingOllama(url);
+    if (!p.ok) { $('kmsg').textContent = `Can't use ${url} — ${p.hint}`; return; }
+    const names = p.models;
+    $('models').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+    const miss = [model, fallback].filter(m => m && !names.includes(m));
+    $('kmsg').textContent = miss.length ? `Connected, but not installed: ${miss.join(', ')}. Installed: ${names.join(', ') || 'none'}` : `Connected ✓ — ${model}${fallback ? ' (fallback ' + fallback + ')' : ''} ready.`;
   };
   $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
   $('notif').onclick = async () => {
