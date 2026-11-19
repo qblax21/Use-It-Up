@@ -20,9 +20,13 @@ formatting slips and otherwise retries once automatically.
 
 Recipe ideas and shelf-life estimates use [Ollama](https://ollama.com) on your own computer.
 No API key, nothing leaves your network. Defaults: `http://localhost:11434`, main model `qwen2.5:14b`,
-fallback `qwen2.5:7b`. If the main model is missing, runs out of memory, or takes longer than the
-timeout (90 s by default), the app retries once with the fallback. All of these are editable under
-**More** in the app (a web page can't read environment variables, so they live in settings).
+fallback `qwen2.5:7b`. Replies are streamed. If the main model errors, runs out of memory, or sends no first
+word within 15 s (when it's already loaded in GPU memory), the app retries once with the fallback. A model that still
+has to be loaded from disk gets 60 extra seconds first (a cold load takes 30–45 s on a hard drive), because switching to
+a fallback that is also cold would be slower. Requests use a 2048-token context window and ask Ollama to keep the model
+loaded for 30 minutes; the model is also pre-loaded when you open the Recipes tab. All of these are editable under
+**More** (a web page can't read environment variables, so they live in settings).
+**Tip:** keep the Ollama model folder on an SSD — cold starts are much faster than from a hard drive.
 
 **On the PC itself** it works as-is (Chrome/Edge allow the HTTPS page to call `localhost`).
 

@@ -61,7 +61,10 @@ const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'nul
 const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 let items = load(KEY, []), hist = load(HKEY, []);
 const save = () => { put(KEY, items); put(HKEY, hist); };
-const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:14b', fallback: 'qwen2.5:7b', timeout: 90, ...load(CKEY, {}) });
+// firstToken: seconds to wait for the first word before switching to the fallback model. overall: hard cap per call.
+// numCtx: context window sent to Ollama (smaller = less GPU memory; the app's prompts are short). keepAlive: how long Ollama keeps the model loaded.
+// coldGrace: extra seconds allowed when the model isn't in GPU memory yet (loading 5–10 GB from disk can take 30–45 s).
+const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:14b', fallback: 'qwen2.5:7b', firstToken: 15, coldGrace: 60, overall: 180, numCtx: 2048, keepAlive: '30m', ...load(CKEY, {}) });
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // ---------- dates ----------
@@ -105,45 +108,79 @@ async function pingOllama(url, ms = 8000) {
     return { ok: false, kind: 'network', status: 0, hint: HINTS.network, timedOut: e.name === 'AbortError' };
   } finally { clearTimeout(timer); }
 }
-let lastModel = '';
-async function llmOnce(model, prompt, max, secs, json = false) {
-  const { url } = getCfg();
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), secs * 1000);
-  let r;
+let lastModel = '', lastStats = null, lastFallbackWhy = '';
+const mkErr = (msg, retry, extra = {}) => Object.assign(new Error(msg), { retry, mine: true }, extra);
+// One streamed chat call. Gives up (so the fallback model can be tried) if the first token hasn't arrived within firstSecs.
+async function llmOnce(model, prompt, max, firstSecs, json = false) {
+  const { url, numCtx, keepAlive, overall } = getCfg();
+  const ctl = new AbortController(), t0 = performance.now();
+  let why = '', gotFirst = false, ttft = null;
+  const firstTimer = setTimeout(() => { why = 'first'; ctl.abort(); }, firstSecs * 1000);
+  const overallTimer = setTimeout(() => { why = 'overall'; ctl.abort(); }, overall * 1000);
   try {
-    r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
-      method: 'POST', signal: ctl.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, stream: false, keep_alive: '30m', ...(json ? { format: 'json' } : {}), messages: [{ role: 'user', content: prompt }], options: { num_predict: max, temperature: json ? 0.3 : 0.5 } })
+    const r = await fetch(url.replace(/\/+$/, '') + '/api/chat', {
+      method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream: true, keep_alive: keepAlive, ...(json ? { format: 'json' } : {}), messages: [{ role: 'user', content: prompt }],
+        options: { num_predict: max, temperature: json ? 0.3 : 0.5, ...(numCtx ? { num_ctx: numCtx } : {}) } })
     });
+    if (!r.ok) {   // e.g. model missing or out of memory (Ollama sends {error}); 502/504 means the proxy/Ollama is down
+      const j = await r.json().catch(() => ({}));
+      const kind = [502, 503, 504].includes(r.status) ? 'proxy-down' : r.status === 403 ? 'host-rejected' : 'http';
+      throw mkErr(j.error || HINTS[kind].replace('%s', r.status), ![502, 503, 504, 403].includes(r.status), { status: r.status });   // the fallback model would hit the same dead end
+    }
+    let text = '', fin = null;
+    const handle = line => {
+      if (!line.trim()) return;
+      let j; try { j = JSON.parse(line); } catch (e) { return; }
+      if (j.error) throw mkErr(j.error, true);
+      const c = j.message?.content;
+      if (c) { if (!gotFirst) { gotFirst = true; clearTimeout(firstTimer); ttft = (performance.now() - t0) / 1000; } text += c; }
+      if (j.done) fin = j;
+    };
+    if (r.body && r.body.getReader) {
+      const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+      for (;;) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); const lines = buf.split('\n'); buf = lines.pop(); lines.forEach(handle); }
+      handle(buf);
+    } else { (await r.text()).split('\n').forEach(handle); gotFirst = true; ttft = (performance.now() - t0) / 1000; }
+    lastModel = model;
+    lastStats = { model, ttft, total: (performance.now() - t0) / 1000, tokens: fin?.eval_count ?? null, tps: fin?.eval_duration ? fin.eval_count / (fin.eval_duration / 1e9) : null, loadSecs: fin?.load_duration ? fin.load_duration / 1e9 : null };
+    return text;
   } catch (e) {
-    if (e.name === 'AbortError') { const err = new Error(`${model} took longer than ${secs}s`); err.retry = true; throw err; }
-    const err = new Error(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`); err.fatal = true; throw err;
-  } finally { clearTimeout(timer); }
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {   // e.g. model missing or out of memory (Ollama sends {error}); 502/504 means the proxy/Ollama is down
-    const err = new Error(j.error || (HINTS[[502, 503, 504].includes(r.status) ? 'proxy-down' : r.status === 403 ? 'host-rejected' : 'http'] || '').replace('%s', r.status) || ('HTTP ' + r.status));
-    err.retry = ![502, 503, 504, 403].includes(r.status);   // the fallback model would hit the same dead end
-    err.status = r.status; throw err;
-  }
-  lastModel = model;
-  return j.message?.content || '';
+    if (e.mine) throw e;
+    if (why === 'first') throw mkErr(`${model} gave no answer within ${firstSecs}s`, true);
+    if (why === 'overall') throw mkErr(`${model} was still going after ${overall}s`, true);
+    throw mkErr(`Can't reach Ollama at ${url}. Is it running on your PC, and is the address right? (See More.)`, false, { fatal: true });
+  } finally { clearTimeout(firstTimer); clearTimeout(overallTimer); }
 }
 // Loads the model into GPU memory in the background so the first real request isn't slow.
 let warmedAt = 0;
 function warm() {
   if (Date.now() - warmedAt < 5 * 60e3) return;
   warmedAt = Date.now();
-  const { url, model } = getCfg();
-  fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: '30m' }) }).catch(() => { warmedAt = 0; });
+  const { url, model, keepAlive, numCtx } = getCfg();
+  fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: keepAlive, ...(numCtx ? { options: { num_ctx: numCtx } } : {}) }) }).catch(() => { warmedAt = 0; });
 }
-// Tries the main model; on timeout / out-of-memory / missing model, retries once with the fallback model.
+// Which models Ollama currently has in GPU memory (null if it can't be asked).
+async function loadedModels() {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3000);
+  try { const r = await fetch(getCfg().url.replace(/\/+$/, '') + '/api/ps', { signal: ctl.signal }); const j = await r.json(); return (j.models || []).map(m => m.name); }
+  catch (e) { return null; } finally { clearTimeout(t); }
+}
+let onAiPhase = null;   // optional UI hook: called with 'loading' (model not in memory yet) or 'thinking'
+// Tries the main model. A model that is already loaded must produce its first token within firstToken seconds; one that
+// still has to be loaded from disk gets coldGrace extra seconds (waiting beats switching to a fallback that is also cold).
+// On timeout / error / out of memory / missing model, retries once with the fallback model.
 async function llm(prompt, max = 900, json = false) {
-  const { model, fallback, timeout } = getCfg();
-  try { return await llmOnce(model, prompt, max, timeout, json); }
+  const { model, fallback, firstToken, coldGrace } = getCfg();
+  lastFallbackWhy = '';
+  const loaded = await loadedModels();
+  const grace = name => (loaded && !loaded.includes(name)) ? coldGrace : 0;
+  onAiPhase && onAiPhase(grace(model) ? 'loading' : 'thinking');
+  try { return await llmOnce(model, prompt, max, firstToken + grace(model), json); }
   catch (e) {
     if (!e.retry || !fallback || fallback === model) throw e;
-    return await llmOnce(fallback, prompt, max, timeout, json).catch(e2 => { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); });
+    try { onAiPhase && onAiPhase(grace(fallback) ? 'loading' : 'thinking'); const t = await llmOnce(fallback, prompt, max, firstToken * 2 + grace(fallback), json); lastFallbackWhy = e.message; return t; }
+    catch (e2) { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); }
   }
 }
 
@@ -440,11 +477,12 @@ async function viewRecipes() {
     const out = $('aiout');
     if (!items.some(isFresh)) { out.textContent = 'Everything in your pantry has expired — nothing safe to cook with.'; return; }
     out.textContent = 'Thinking…';
+    onAiPhase = p => { if (!aiRecipes.length || out.textContent.endsWith('…')) out.textContent = p === 'loading' ? 'Loading the AI model into GPU memory — the first use after a while can take up to a minute…' : 'Thinking…'; };
     try {
       const t0 = performance.now();
       const { val, retried } = await llmJSON(recipePrompt(), 400, normalizeRecipes);
       aiRecipes = val; window.lastRecipeStats = { secs: (performance.now() - t0) / 1000, retried };
-      out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}</div>`; wireSteps();
+      out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}${lastFallbackWhy ? ' · used the fallback model because ' + esc(lastFallbackWhy) : ''}</div>`; wireSteps();
     } catch (e) {
       out.innerHTML = `${esc(e.message)} ${e.raw ? '<details><summary class="muted">Show raw reply</summary><div class="ai muted">' + md(e.raw) + '</div></details>' : ''}`;
     }
@@ -483,7 +521,9 @@ function viewMore() {
     <label>Ollama address</label><input id="curl" value="${esc(getCfg().url)}" autocapitalize="off" autocorrect="off">
     <label>Main model</label><input id="cmodel" list="models" value="${esc(getCfg().model)}" autocapitalize="off" autocorrect="off"><datalist id="models"></datalist>
     <label>Fallback model (used if the main one is slow, out of memory or missing)</label><input id="cfall" list="models" value="${esc(getCfg().fallback)}" autocapitalize="off" autocorrect="off">
-    <label>Switch to fallback after (seconds)</label><input id="ctime" type="number" min="10" max="600" value="${getCfg().timeout}">
+    <label>Switch to fallback if no first word within (seconds)</label><input id="ctime" type="number" min="5" max="300" value="${getCfg().firstToken}">
+    <label>Context window (tokens; smaller uses less GPU memory)</label><input id="cctx" type="number" min="512" max="32768" step="512" value="${getCfg().numCtx}">
+    <label>Keep model loaded for (e.g. 30m, 2h, -1 = forever)</label><input id="ckeep" value="${esc(getCfg().keepAlive)}" autocapitalize="off">
     <div class="row"><button class="b" id="csave">Save &amp; test</button><button class="b alt" id="creset">Reset</button></div>
     <div id="kmsg" class="muted"></div>
   </div>
@@ -493,8 +533,9 @@ function viewMore() {
   </div>`;
   $('csave').onclick = async () => {
     const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:14b';
-    const fallback = $('cfall').value.trim(), timeout = Math.max(10, +$('ctime').value || 90);
-    put(CKEY, { url, model, fallback, timeout }); $('kmsg').textContent = 'Testing…';
+    const fallback = $('cfall').value.trim(), firstToken = Math.max(5, +$('ctime').value || 15);
+    const numCtx = Math.max(512, +$('cctx').value || 4096), keepAlive = $('ckeep').value.trim() || '30m';
+    put(CKEY, { url, model, fallback, firstToken, numCtx, keepAlive }); warmedAt = 0; $('kmsg').textContent = 'Testing…';
     const p = await pingOllama(url);
     if (!p.ok) { $('kmsg').textContent = `Can't use ${url} — ${p.hint}`; return; }
     const names = p.models;
