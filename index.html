@@ -42,10 +42,15 @@ video{width:100%;border-radius:12px;background:#000}
 .recipe img{width:76px;height:76px;border-radius:10px;object-fit:cover}
 .ai{white-space:pre-wrap}
 .hide{display:none}
+.soonbar{background:#fff3cd;color:#5c4400;padding:9px 16px;font-size:14px;cursor:pointer;border-bottom:1px solid #f0dc9b}
+.soonbar.red{background:#f8d7da;color:#721c24;border-bottom-color:#efb7bd}
+.sum{border-left:4px solid var(--amber)}
+.sum div{margin:3px 0}
 </style>
 </head>
 <body>
 <header>🥕 Use It Up</header>
+<div id="soon" class="hide" role="button" tabindex="0"></div>
 <main id="main"></main>
 <nav>
   <button data-t="list">Pantry</button>
@@ -193,6 +198,32 @@ function go(t) { stopScan(); tab = t; render(); }
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
   ({ list: viewList, add: viewAdd, recipes: viewRecipes, more: viewMore })[tab]();
+  updateSoon();
+}
+
+// ---------- "eat soon" reminders that don't depend on push notifications ----------
+const relDay = d => d < 0 ? 'expired' : d === 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`;
+const soonItems = () => items.filter(i => daysLeft(i.expires) <= 3).sort((a, b) => a.expires.localeCompare(b.expires));
+// Banner under the header on every tab + the app-icon badge (where the browser supports it).
+function updateSoon() {
+  const el = $('soon'), soon = soonItems();
+  try { if (navigator.setAppBadge) { soon.length ? navigator.setAppBadge(soon.length) : navigator.clearAppBadge(); } } catch (e) {}
+  if (!soon.length) { el.className = 'hide'; el.innerHTML = ''; return; }
+  const shown = soon.slice(0, 3).map(i => `<b>${esc(i.name)}</b> (${relDay(daysLeft(i.expires))})`).join(', ');
+  el.className = 'soonbar' + (soon.some(i => daysLeft(i.expires) <= 0) ? ' red' : '');
+  el.innerHTML = `⏰ Eat soon: ${shown}${soon.length > 3 ? ` +${soon.length - 3} more` : ''}`;
+  el.onclick = () => { if (tab !== 'list') go('list'); else window.scrollTo(0, 0); };
+}
+// Once-a-day card at the top of the Pantry: what expired, and what expires in the next 3 days.
+function dailySummary() {
+  const today = isoLocal(new Date());
+  if (load('useitup.sumdone', '') === today) return '';
+  const g = [['⛔ Expired', i => daysLeft(i.expires) < 0], ['🔴 Today', i => daysLeft(i.expires) === 0], ['🟠 Tomorrow', i => daysLeft(i.expires) === 1], ['🟡 In 2–3 days', i => { const d = daysLeft(i.expires); return d === 2 || d === 3; }]]
+    .map(([label, f]) => [label, items.filter(f)]).filter(([, l]) => l.length);
+  if (!g.length) return '';
+  const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  return `<div class="card sum"><b>☀️ Today's summary — ${esc(dateStr)}</b>${g.map(([label, l]) => `<div>${label}: ${l.map(i => esc(i.name)).join(', ')}</div>`).join('')}
+    <button class="b alt sm" id="sumok" style="margin-top:6px">Got it</button></div>`;
 }
 
 function finish(id, outcome) {
@@ -203,9 +234,7 @@ function finish(id, outcome) {
 
 function viewList() {
   const sorted = [...items].sort((a, b) => a.expires.localeCompare(b.expires));
-  const urgent = sorted.filter(i => daysLeft(i.expires) <= 2);
-  let h = '';
-  if (urgent.length) h += `<div class="banner"><b>Eat soon:</b> ${urgent.map(i => esc(i.name)).join(', ')}</div>`;
+  let h = dailySummary();
   if (!sorted.length) h += `<p class="muted">Nothing here yet. Tap <b>Add</b> to scan groceries or log leftovers.</p>`;
   h += sorted.map(i => `<div class="card item">
     <div class="name">${i.leftover ? '🍱 ' : ''}${esc(i.name)}${i.qty ? ` <span class="qty">×${esc(i.qty)}</span>` : ''}</div>${badge(i.expires)}
@@ -213,6 +242,7 @@ function viewList() {
     <button class="x" title="Threw it out" data-toss="${i.id}">🗑️</button></div>`).join('');
   if (sorted.length) h += `<p class="muted">😋 = ate it · 🗑️ = threw it out</p>`;
   main.innerHTML = h;
+  if ($('sumok')) $('sumok').onclick = () => { put('useitup.sumdone', isoLocal(new Date())); viewList(); };
   main.querySelectorAll('[data-ate]').forEach(b => b.onclick = () => finish(b.dataset.ate, 'ate'));
   main.querySelectorAll('[data-toss]').forEach(b => b.onclick = () => finish(b.dataset.toss, 'tossed'));
 }
@@ -528,13 +558,17 @@ function viewMore() {
     <div id="kmsg" class="muted"></div>
   </div>
   <div class="card"><b>Reminders</b>
-    <p class="muted">Get a notification when something expires within a day (shown when you open the app).</p>
-    <button class="b alt" id="notif">Enable notifications</button>
+    <p class="muted">The "Eat soon" bar, today's summary card and the app-icon badge always work. Notifications are a bonus: with no server they can only appear <b>when you open the app</b>, not while it's closed. On iPhone, first tap Share → <b>Add to Home Screen</b> and open the app from there.</p>
+    <div class="row"><button class="b alt" id="notif">Enable notifications</button><button class="b alt" id="ntest">Send a test</button></div>
+    <div id="nstat" class="muted"></div>
   </div>`;
+  const standalone = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+  $('nstat').innerHTML = [`Notifications API: ${'Notification' in window ? 'yes' : 'no'}`, `permission: ${'Notification' in window ? Notification.permission : 'n/a'}`, `installed app: ${standalone ? 'yes' : 'no (open it from the Home Screen icon)'}`,
+    `service worker: ${'serviceWorker' in navigator ? 'yes' : 'no'}`, `background push: not set up (needs a server)`, `icon badge: ${'setAppBadge' in navigator ? 'yes' : 'no'}`].join(' · ');
   $('csave').onclick = async () => {
     const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:14b';
     const fallback = $('cfall').value.trim(), firstToken = Math.max(5, +$('ctime').value || 15);
-    const numCtx = Math.max(512, +$('cctx').value || 4096), keepAlive = $('ckeep').value.trim() || '30m';
+    const numCtx = Math.max(512, +$('cctx').value || 2048), keepAlive = $('ckeep').value.trim() || '30m';
     put(CKEY, { url, model, fallback, firstToken, numCtx, keepAlive }); warmedAt = 0; $('kmsg').textContent = 'Testing…';
     const p = await pingOllama(url);
     if (!p.ok) { $('kmsg').textContent = `Can't use ${url} — ${p.hint}`; return; }
@@ -545,20 +579,39 @@ function viewMore() {
   };
   $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
   $('notif').onclick = async () => {
-    if (!('Notification' in window)) { $('notif').textContent = 'Not supported here'; return; }
-    const p = await Notification.requestPermission(); $('notif').textContent = p === 'granted' ? 'Enabled ✓' : 'Blocked in browser settings';
+    try {
+      if (!('Notification' in window)) { $('notif').textContent = 'Not supported here'; return; }
+      const p = await Notification.requestPermission(); $('notif').textContent = p === 'granted' ? 'Enabled ✓' : 'Blocked — change it in Settings';
+    } catch (e) { $('notif').textContent = 'Failed: ' + e.message; }
+  };
+  $('ntest').onclick = async () => {
+    try { await showNote('Use It Up test', 'If you can see this, notifications work on this device.'); $('nstat').insertAdjacentHTML('beforeend', '<br>Test sent.'); }
+    catch (e) { $('nstat').insertAdjacentHTML('beforeend', `<br>Test failed: ${esc(e.message)}`); }
   };
 }
 
-// ---------- reminders ----------
-function remind() {
-  const urgent = items.filter(i => daysLeft(i.expires) <= 1);
-  if (urgent.length && 'Notification' in window && Notification.permission === 'granted')
-    new Notification('Eat soon!', { body: urgent.map(i => i.name).join(', ') });
+// ---------- notifications (best effort; the banner/summary above are the dependable reminders) ----------
+// Mobile browsers want ServiceWorkerRegistration.showNotification(); the plain Notification constructor can throw there.
+async function showNote(title, body) {
+  if (!('Notification' in window)) throw new Error('Notifications aren\'t supported here');
+  if (Notification.permission !== 'granted') throw new Error('permission not granted yet — tap "Enable notifications"');
+  const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+  if (reg && reg.showNotification) await reg.showNotification(title, { body, icon: 'icon-192.png', tag: 'useitup-daily' });
+  else new Notification(title, { body });
 }
-remind();
+// At most one per day, only when the app is opened. Never allowed to break startup.
+async function remind() {
+  try {
+    const soon = soonItems(); if (!soon.length) return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const today = isoLocal(new Date()); if (load('useitup.lastnote', '') === today) return;
+    await showNote(`Eat soon: ${soon.length} item${soon.length > 1 ? 's' : ''}`, soon.slice(0, 4).map(i => `${i.name} (${relDay(daysLeft(i.expires))})`).join(', '));
+    put('useitup.lastnote', today);
+  } catch (e) { /* ignore: the in-app banner still shows */ }
+}
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
+remind();   // after render, so a notification problem can never leave the app blank
 </script>
 </body>
 </html>
