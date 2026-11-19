@@ -15,7 +15,12 @@
 @media (prefers-color-scheme:dark){:root{--bg:#161814;--card:#22251f;--ink:#eee;--mute:#999;--line:#33362e}}
 *{box-sizing:border-box}
 body{margin:0;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:80px}
-header{background:var(--green);color:#fff;padding:14px 16px;font-size:20px;font-weight:600}
+header{background:var(--green);color:#fff;padding:14px 16px;font-size:20px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.aipill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:rgba(255,255,255,.2);cursor:pointer}
+.aipill:empty{display:none}
+.aipill.offline{background:#c8372d}
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
+#toast.show{opacity:1}
 main{max-width:640px;margin:0 auto;padding:12px 16px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line)}
 nav button{flex:1;padding:14px 4px;border:0;background:none;color:var(--mute);font-size:14px}
@@ -49,7 +54,8 @@ video{width:100%;border-radius:12px;background:#000}
 </style>
 </head>
 <body>
-<header>🥕 Use It Up</header>
+<header><span>🥕 Use It Up</span><span id="aipill" class="aipill"></span></header>
+<div id="toast"></div>
 <div id="soon" class="hide" role="button" tabindex="0"></div>
 <main id="main"></main>
 <nav>
@@ -175,7 +181,7 @@ let onAiPhase = null;   // optional UI hook: called with 'loading' (model not in
 // Tries the main model. A model that is already loaded must produce its first token within firstToken seconds; one that
 // still has to be loaded from disk gets coldGrace extra seconds (waiting beats switching to a fallback that is also cold).
 // On timeout / error / out of memory / missing model, retries once with the fallback model.
-async function llm(prompt, max = 900, json = false) {
+async function llmCore(prompt, max = 900, json = false) {
   const { model, fallback, firstToken, coldGrace } = getCfg();
   lastFallbackWhy = '';
   const loaded = await loadedModels();
@@ -185,9 +191,50 @@ async function llm(prompt, max = 900, json = false) {
   catch (e) {
     if (!e.retry || !fallback || fallback === model) throw e;
     try { onAiPhase && onAiPhase(grace(fallback) ? 'loading' : 'thinking'); const t = await llmOnce(fallback, prompt, max, firstToken * 2 + grace(fallback), json); lastFallbackWhy = e.message; return t; }
-    catch (e2) { throw new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`); }
+    catch (e2) { throw Object.assign(new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`), { fatal: e.fatal || e2.fatal, status: e2.status ?? e.status }); }
   }
 }
+// Public entry point: same as llmCore, but keeps the app's "AI online / offline" state up to date.
+async function llm(prompt, max = 900, json = false) {
+  try { const t = await llmCore(prompt, max, json); if (ai.state !== 'online') setAi(true); return t; }
+  catch (e) { if (e.fatal || [502, 503, 504, 403].includes(e.status)) setAi(false, e.message); throw e; }
+}
+
+// ---------- AI availability: offline state, background retry, automatic switch back ----------
+const ai = { state: 'unknown', hint: '', retryMs: 15000, timer: null };
+function paintAiPill() {
+  const el = $('aipill'); if (!el) return;
+  el.textContent = ai.state === 'online' ? 'AI ●' : ai.state === 'offline' ? 'AI offline' : '';
+  el.className = 'aipill ' + ai.state;
+}
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.className = 'show'; clearTimeout(toast.t); toast.t = setTimeout(() => { t.className = ''; }, 4000); }
+function setAi(ok, hint = '') {
+  const was = ai.state; ai.state = ok ? 'online' : 'offline'; ai.hint = hint; paintAiPill();
+  if (ok) { stopAiRetry(); if (was === 'offline') onAiBack(); }
+  else { if (was !== 'offline' && tab === 'recipes') viewRecipes(); startAiRetry(); }
+}
+// Switch back to AI mode without losing what the user is doing.
+function onAiBack() {
+  toast('✅ AI is back online');
+  if (tab === 'recipes') viewRecipes();
+  else if (tab === 'more' && $('diagrun') == null) viewMore();
+}
+async function checkAI() { const p = await pingOllama(getCfg().url, 5000); setAi(p.ok, p.hint || ''); return p; }
+function startAiRetry() {
+  if (ai.timer) return;
+  ai.retryMs = 15000;
+  const tick = async () => {
+    ai.timer = null;
+    const p = await pingOllama(getCfg().url, 5000);
+    if (p.ok) { setAi(true); return; }
+    ai.hint = p.hint; ai.retryMs = Math.min(ai.retryMs * 2, 60000);   // 15 s, 30 s, then every 60 s
+    ai.timer = setTimeout(tick, ai.retryMs);
+  };
+  ai.timer = setTimeout(tick, ai.retryMs);
+}
+function stopAiRetry() { clearTimeout(ai.timer); ai.timer = null; }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && ai.state === 'offline') { stopAiRetry(); checkAI(); } });
+window.addEventListener('online', () => { if (ai.state !== 'online') { stopAiRetry(); checkAI(); } });
 
 // ---------- views ----------
 let tab = 'list';
@@ -312,8 +359,10 @@ function viewAdd() {
   $('left').onclick = () => { sync(); draft.leftover = true; draft.expires = addDays(4); if (!draft.name) draft.name = 'Leftovers: '; viewAdd(); $('name').focus(); };
   $('look').onclick = () => { sync(); lookup(draft.barcode); };
   $('scan').onclick = startScan;
+  if (ai.state === 'offline') { $('est').textContent = '✨ AI offline — use the quick date buttons'; $('est').style.opacity = .6; }
   $('est').onclick = async () => {
     sync(); if (!draft.name.trim()) { $('msg').textContent = 'Enter a name first.'; return; }
+    if (ai.state === 'offline') { $('msg').textContent = 'AI is offline right now (it will reconnect on its own). Pick a date with the quick buttons for now.'; return; }
     $('msg').textContent = 'Asking your AI…';
     try {
       const t = await llm(`How many days will "${draft.name}" stay safe to eat ${draft.leftover ? 'as a cooked leftover in the fridge' : 'when bought fresh and stored properly (in the fridge if it needs it)'}? Be conservative. Reply with only a whole number of days, nothing else.`, 20);
@@ -488,22 +537,65 @@ function renderRecipes() {
 }
 async function getSteps(idx) {
   const r = aiRecipes[idx], box = document.querySelector(`[data-steps="${idx}"]`);
+  if (!r || !box) return;
   box.innerHTML = '<span class="muted">Writing steps…</span>';
   try {
     const { val } = await llmJSON(`Recipe: ${r.name}\nIngredients: ${r.ingredients.join(', ')}\n\nWrite 4 to 6 short numbered cooking steps using ONLY those ingredients. Reply with JSON only: {"steps":["...","..."]}`, 500, acceptSteps);
     r.steps = val;
-  } catch (e) { box.innerHTML = `<span class="muted">Couldn't write steps (${esc(e.message)}). </span><button class="b alt sm" data-getsteps="${idx}">Try again</button>`; wireSteps(); return; }
+  } catch (e) { const b2 = document.querySelector(`[data-steps="${idx}"]`); if (b2) { b2.innerHTML = `<span class="muted">Couldn't write steps (${esc(e.message)}). </span><button class="b alt sm" data-getsteps="${idx}">Try again</button>`; wireSteps(); } return; }
+  if (!$('aiout')) return;   // user has moved to another tab; the steps are kept in memory
   $('aiout').innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`; wireSteps();
 }
 const wireSteps = () => document.querySelectorAll('[data-getsteps]').forEach(b => b.onclick = () => getSteps(+b.dataset.getsteps));
 const md = s =>esc(s).replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
+// ---- recipe matching without AI: ingredient overlap against a small bundled recipe book (works with no internet) ----
+const BOOK = [
+  ['Spinach & cheese omelette', 'eggs, spinach, cheese'], ['Veggie scramble', 'eggs, onion, bell pepper, tomato'], ['French toast', 'bread, eggs, milk'],
+  ['Pancakes', 'flour, milk, eggs, butter'], ['Grilled cheese sandwich', 'bread, cheese, butter'], ['Tuna salad sandwich', 'tuna, bread, mayonnaise'],
+  ['Garlic butter pasta', 'pasta, garlic, butter, cheese'], ['Creamy spinach pasta', 'pasta, spinach, milk, garlic'], ['Tomato pasta', 'pasta, tomato, garlic, onion'],
+  ['Spaghetti bolognese', 'ground beef, pasta, tomato, onion, garlic'], ['Chicken stir-fry', 'chicken breast, bell pepper, onion, rice, soy sauce'],
+  ['Chicken & rice bowl', 'chicken breast, rice, broccoli'], ['Fried rice', 'rice, eggs, carrot, onion, soy sauce'], ['Vegetable stir-fry', 'broccoli, carrot, bell pepper, rice, soy sauce'],
+  ['Chicken quesadillas', 'tortillas, cheese, chicken breast, bell pepper'], ['Bean burritos', 'tortillas, black beans, rice, cheese, salsa'], ['Beef tacos', 'ground beef, tortillas, cheese, tomato, lettuce'],
+  ['Mashed potatoes', 'potato, butter, milk'], ['Loaded baked potato', 'potato, butter, cheese'], ['Potato & egg hash', 'potato, onion, eggs'],
+  ['Chicken soup', 'chicken breast, carrot, onion, potato'], ['Broccoli cheese soup', 'broccoli, cheese, milk, onion'], ['Yogurt parfait', 'yogurt, banana, oats'], ['Banana smoothie', 'banana, milk, yogurt'],
+].map(([name, ings]) => ({ name, ings: ings.split(', ') }));
+const urgencyOf = d => Math.max(1, 8 - d);
+// Scores each book recipe by how many of its ingredients you have (expiring items count extra); expired items never count as "have".
+function overlapMatches(limit = 8) {
+  return BOOK.map(r => {
+    const st = r.ings.map(i => checkIngredient(i));
+    const have = r.ings.filter((_, k) => st[k] === 'have'), need = r.ings.filter((_, k) => st[k] !== 'have'), expired = r.ings.filter((_, k) => st[k] === 'expired');
+    const urgency = have.reduce((s, ing) => { const it = items.find(i => isFresh(i) && itemMatches(words(ing), i.name)); return s + (it ? urgencyOf(daysLeft(it.expires)) : 0); }, 0);
+    return { ...r, have, need, expired, cover: have.length / r.ings.length, urgency };
+  }).filter(r => r.have.length >= 1).sort((a, b) => (b.cover - a.cover) || (b.urgency - a.urgency)).slice(0, limit);
+}
+function overlapSection() {
+  const m = overlapMatches();
+  if (!m.length) return '<p class="muted">Nothing in the built-in recipe book matches your pantry yet — add a few staples (eggs, pasta, rice, cheese…).</p>';
+  return `<p class="muted"><b>Ideas from your pantry</b> — ranked by how many ingredients you already have (no AI, works offline).</p>` + m.map(r => `<div class="card"><b>${esc(r.name)}</b>
+    <div class="muted">You have ${r.have.length} of ${r.ings.length}: ${r.have.map(esc).join(', ')}</div>
+    ${r.need.length ? `<div class="muted">Need: ${r.need.map(esc).join(', ')}</div>` : '<div class="muted">✅ Nothing else needed</div>'}</div>`).join('');
+}
+function offlineCard() {
+  return `<div class="card" style="border-left:4px solid var(--red)"><b>🔌 AI is offline</b>
+    <div class="muted" style="margin-top:4px">${esc(ai.hint || "Can't reach Ollama on your PC.")}</div>
+    <div class="muted" style="margin-top:4px">Your pantry, expiry list and reminders work as normal. Below are recipe matches based on ingredient overlap — no AI needed. I'm retrying in the background and will switch back automatically.</div>
+    <button class="b alt sm" id="retryai" style="margin-top:8px">Retry now</button></div>`;
+}
+
+let recipesToken = 0;
 async function viewRecipes() {
   const food = items.filter(i => !i.leftover).sort((a, b) => a.expires.localeCompare(b.expires));
   if (!food.length) { main.innerHTML = '<p class="muted">Add some groceries first, then I\'ll suggest recipes. (Leftovers are skipped — just eat those!)</p>'; return; }
-  main.innerHTML = `<div class="card"><button class="b" id="ai" style="width:100%">✨ Ask my AI for ideas using everything I have</button><div id="aiout" class="ai" style="margin-top:10px"></div></div><div id="rlist"><p class="muted">Finding recipes…</p></div>`;
-  warm();   // start loading the model now so the button feels instant
-  $('ai').onclick = async () => {
+  const off = ai.state === 'offline', my = ++recipesToken;
+  // stale async results (user switched tab / AI state flipped meanwhile) must not overwrite the current screen
+  const setHTML = (id, html) => { if (my === recipesToken && tab === 'recipes' && $(id)) $(id).innerHTML = html; };
+  main.innerHTML = (off ? offlineCard() : `<div class="card"><button class="b" id="ai" style="width:100%">✨ Ask my AI for ideas using everything I have</button><div id="aiout" class="ai" style="margin-top:10px"></div></div>`)
+    + `<div id="ovl">${off ? overlapSection() : ''}</div><div id="rlist"><p class="muted">Finding recipes…</p></div>`;
+  if (off) $('retryai').onclick = async () => { $('retryai').textContent = 'Checking…'; stopAiRetry(); const p = await checkAI(); if (!p.ok) { $('retryai').textContent = 'Still offline — retry now'; } };
+  else warm();   // start loading the model now so the button feels instant
+  if ($('ai')) $('ai').onclick = async () => {
     const out = $('aiout');
     if (!items.some(isFresh)) { out.textContent = 'Everything in your pantry has expired — nothing safe to cook with.'; return; }
     out.textContent = 'Thinking…';
@@ -521,18 +613,34 @@ async function viewRecipes() {
     const list = await getIngredients();
     const matched = [];
     for (const it of food) { const m = matchIngredient(it.name, list); if (m) matched.push({ it, m }); }
-    if (!matched.length) { $('rlist').innerHTML = '<p class="muted">Couldn\'t match your items to recipe ingredients. Try simpler names like "chicken" or "tomato".</p>'; return; }
+    if (!matched.length) { setHTML('rlist', '<p class="muted">Couldn\'t match your items to recipe ingredients. Try simpler names like "chicken" or "tomato".</p>'); return; }
     const meals = {};
     await Promise.all(matched.map(async ({ it, m }) => {
       const j = await (await fetch(MEAL + 'filter.php?i=' + encodeURIComponent(m.replace(/ /g, '_')))).json();
       const urgency = Math.max(1, 8 - daysLeft(it.expires));
       (j.meals || []).forEach(x => { const e = meals[x.idMeal] ||= { ...x, score: 0, uses: [] }; e.score += urgency; e.uses.push(it.name); });
     }));
-    const top = Object.values(meals).sort((a, b) => b.score - a.score).slice(0, 12);
-    $('rlist').innerHTML = `<p class="muted">Matched: ${matched.map(x => esc(x.it.name)).join(', ')}. Ranked by what's expiring first.</p>` +
+    const top = Object.values(meals).sort((a, b) => b.score - a.score).slice(0, 10);
+    // fetch each candidate's full ingredient list so we can show real overlap with the pantry
+    await Promise.all(top.map(async r => {
+      try {
+        const d = (await (await fetch(MEAL + 'lookup.php?i=' + r.idMeal)).json()).meals?.[0], ings = [];
+        for (let n = 1; n <= 20; n++) { const v = d?.['strIngredient' + n]; if (v && v.trim()) ings.push(v.trim()); }
+        const st = ings.map(i => checkIngredient(i));
+        r.total = ings.length; r.have = st.filter(s => s === 'have' || s === 'staple').length; r.need = ings.filter((_, k) => st[k] === 'missing' || st[k] === 'similar');
+      } catch (e) {}
+    }));
+    const cov = r => r.total ? r.have / r.total : 0;
+    top.sort((a, b) => (cov(b) * 10 + b.score / 10) - (cov(a) * 10 + a.score / 10));
+    setHTML('rlist', `<p class="muted">Recipes from TheMealDB using: ${matched.map(x => esc(x.it.name)).join(', ')}. Ranked by how many ingredients you already have, then by what's expiring first.</p>` +
       (top.map(r => `<a class="card recipe" href="https://www.themealdb.com/meal/${r.idMeal}" target="_blank" rel="noopener">
-        <img src="${r.strMealThumb}/small" alt=""><div><b>${esc(r.strMeal)}</b><div class="muted">Uses: ${r.uses.map(esc).join(', ')}</div></div></a>`).join('') || '<p class="muted">No recipes found for those items.</p>');
-  } catch (e) { $('rlist').innerHTML = '<p class="muted">Couldn\'t reach the recipe service. Check your connection.</p>'; }
+        <img src="${r.strMealThumb}/small" alt=""><div><b>${esc(r.strMeal)}</b>
+        <div class="muted">${r.total ? `You have ${r.have} of ${r.total} ingredients` : 'Uses: ' + r.uses.map(esc).join(', ')}</div>
+        ${r.need && r.need.length ? `<div class="muted">Need: ${r.need.slice(0, 4).map(esc).join(', ')}${r.need.length > 4 ? ` +${r.need.length - 4} more` : ''}</div>` : ''}</div></a>`).join('') || '<p class="muted">No recipes found for those items.</p>'));
+  } catch (e) {
+    setHTML('rlist', '<p class="muted">Couldn\'t reach the online recipe list. Check your connection.</p>');
+    if (!off) setHTML('ovl', overlapSection());   // still give ideas from the built-in recipe book
+  }
 }
 
 // ---------- more: history + settings ----------
@@ -612,6 +720,8 @@ async function remind() {
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
 remind();   // after render, so a notification problem can never leave the app blank
+$('aipill').onclick = () => go('more');
+checkAI();  // learn whether the AI is reachable (starts the background retry if not)
 </script>
 </body>
 </html>
