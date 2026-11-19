@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Use It Up</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -14,16 +14,18 @@
 :root{--bg:#f6f5f0;--card:#fff;--ink:#222;--mute:#777;--green:#2f7d4f;--amber:#e0a100;--red:#c8372d;--line:#e4e2da}
 @media (prefers-color-scheme:dark){:root{--bg:#161814;--card:#22251f;--ink:#eee;--mute:#999;--line:#33362e}}
 *{box-sizing:border-box}
-body{margin:0;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:80px}
-header{background:var(--green);color:#fff;padding:14px 16px;font-size:20px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
+/* --nav-lift: extra space under the tab labels so they sit clear of the iPhone home indicator (on top of env(safe-area-inset-bottom)) */
+:root{--nav-lift:12px}
+body{margin:0;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:calc(64px + var(--nav-lift) + env(safe-area-inset-bottom) + 24px)}
+header{background:var(--green);color:#fff;padding:calc(14px + env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 14px max(16px,env(safe-area-inset-left));font-size:20px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .aipill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:rgba(255,255,255,.2);cursor:pointer}
 .aipill:empty{display:none}
 .aipill.offline{background:#c8372d}
-#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
+#toast{position:fixed;left:50%;bottom:calc(84px + var(--nav-lift) + env(safe-area-inset-bottom));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
 #toast.show{opacity:1}
-main{max-width:640px;margin:0 auto;padding:12px 16px}
-nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line)}
-nav button{flex:1;padding:14px 4px;border:0;background:none;color:var(--mute);font-size:14px}
+main{max-width:640px;margin:0 auto;padding:12px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left))}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding:0 env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + var(--nav-lift)) env(safe-area-inset-left);z-index:10}
+nav button{flex:1;min-height:52px;padding:12px 4px;border:0;background:none;color:var(--mute);font-size:14px}
 nav button.on{color:var(--green);font-weight:700}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
 .item{display:flex;align-items:center;gap:8px}
