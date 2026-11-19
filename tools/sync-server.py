@@ -114,9 +114,12 @@ class H(BaseHTTPRequestHandler):
                 raise ValueError
         except ValueError:
             return self._send(400, {'error': 'bad json'})
-        with LOCK:
-            merged = merge(read_state(code), incoming)
-            write_state(code, merged)
+        try:
+            with LOCK:
+                merged = merge(read_state(code), incoming)
+                write_state(code, merged)
+        except Exception as e:  # report instead of dropping the connection
+            return self._send(500, {'error': 'server could not save: %r' % (e,)})
         self._send(200, merged)
 
 
