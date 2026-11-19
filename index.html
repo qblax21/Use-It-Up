@@ -153,6 +153,7 @@ async function llmOnce(model, prompt, max, firstSecs, json = false) {
       for (;;) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); const lines = buf.split('\n'); buf = lines.pop(); lines.forEach(handle); }
       handle(buf);
     } else { (await r.text()).split('\n').forEach(handle); gotFirst = true; ttft = (performance.now() - t0) / 1000; }
+    if (!text) throw mkErr(`${model} sent back an empty reply`, true);
     lastModel = model;
     lastStats = { model, ttft, total: (performance.now() - t0) / 1000, tokens: fin?.eval_count ?? null, tps: fin?.eval_duration ? fin.eval_count / (fin.eval_duration / 1e9) : null, loadSecs: fin?.load_duration ? fin.load_duration / 1e9 : null };
     return text;
@@ -165,8 +166,8 @@ async function llmOnce(model, prompt, max, firstSecs, json = false) {
 }
 // Loads the model into GPU memory in the background so the first real request isn't slow.
 let warmedAt = 0;
-function warm() {
-  if (Date.now() - warmedAt < 5 * 60e3) return;
+function warm(force = false) {
+  if (!force && Date.now() - warmedAt < 5 * 60e3) return;
   warmedAt = Date.now();
   const { url, model, keepAlive, numCtx } = getCfg();
   fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: keepAlive, ...(numCtx ? { options: { num_ctx: numCtx } } : {}) }) }).catch(() => { warmedAt = 0; });
@@ -665,6 +666,11 @@ function viewMore() {
     <div class="row"><button class="b" id="csave">Save &amp; test</button><button class="b alt" id="creset">Reset</button></div>
     <div id="kmsg" class="muted"></div>
   </div>
+  <div class="card"><b>Diagnostics</b>
+    <p class="muted">Step-by-step check of the connection to your PC's AI. Run it from the device that has the problem (e.g. your iPhone).</p>
+    <div class="row"><button class="b" id="diagrun">Run checks</button><button class="b alt" id="diagload">Load model now</button><button class="b alt" id="diagcopy">Copy results</button></div>
+    <div id="diagout"></div>
+  </div>
   <div class="card"><b>Reminders</b>
     <p class="muted">The "Eat soon" bar, today's summary card and the app-icon badge always work. Notifications are a bonus: with no server they can only appear <b>when you open the app</b>, not while it's closed. On iPhone, first tap Share → <b>Add to Home Screen</b> and open the app from there.</p>
     <div class="row"><button class="b alt" id="notif">Enable notifications</button><button class="b alt" id="ntest">Send a test</button></div>
@@ -686,6 +692,12 @@ function viewMore() {
     $('kmsg').textContent = miss.length ? `Connected, but not installed: ${miss.join(', ')}. Installed: ${names.join(', ') || 'none'}` : `Connected ✓ — ${model}${fallback ? ' (fallback ' + fallback + ')' : ''} ready.`;
   };
   $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
+  $('diagrun').onclick = runDiagnostics;
+  $('diagload').onclick = () => { warm(true); $('diagout').insertAdjacentHTML('afterbegin', '<p class="muted">Asked Ollama to load the model — a cold start can take 30–45 s. Run the checks again in a moment.</p>'); };
+  $('diagcopy').onclick = async () => {
+    const t = window.lastDiagText || 'Run the checks first.';
+    try { await navigator.clipboard.writeText(t); $('diagcopy').textContent = 'Copied ✓'; } catch (e) { $('diagout').insertAdjacentHTML('beforeend', `<textarea style="width:100%;height:140px" readonly>${esc(t)}</textarea>`); }
+  };
   $('notif').onclick = async () => {
     try {
       if (!('Notification' in window)) { $('notif').textContent = 'Not supported here'; return; }
@@ -696,6 +708,71 @@ function viewMore() {
     try { await showNote('Use It Up test', 'If you can see this, notifications work on this device.'); $('nstat').insertAdjacentHTML('beforeend', '<br>Test sent.'); }
     catch (e) { $('nstat').insertAdjacentHTML('beforeend', `<br>Test failed: ${esc(e.message)}`); }
   };
+}
+
+// ---------- diagnostics: step-by-step checks of the AI connection ----------
+async function runDiagnostics() {
+  const box = $('diagout'), cfg = getCfg(), url = cfg.url.trim().replace(/\/+$/, '');
+  const icon = { run: '⏳', pass: '✅', warn: '⚠️', fail: '❌', skip: '➖' };
+  const rows = [];
+  const draw = () => { box.innerHTML = rows.map(r => `<div class="card" style="margin:8px 0"><b>${icon[r.status]} ${esc(r.title)}</b>${r.detail ? `<div class="muted">${esc(r.detail)}</div>` : ''}${r.hint ? `<div style="margin-top:4px">👉 ${esc(r.hint)}</div>` : ''}</div>`).join(''); };
+  const ctx = {};   // results shared between steps
+  const steps = [
+    ['1. The address looks right', async () => {
+      let u; try { u = new URL(cfg.url.trim()); } catch (e) { return ['fail', `"${cfg.url}" isn't a valid web address.`, 'It should look like https://<your-pc>.<tailnet>.ts.net/ollama (or http://localhost:11434 when you are on the PC itself).']; }
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+      if (location.protocol === 'https:' && u.protocol === 'http:' && !local) return ['fail', `This page is HTTPS but ${u.origin} is plain http — the browser blocks that ("mixed content").`, 'Use the https:// Tailscale address.'];
+      if (local && /iPhone|iPad|Android/i.test(navigator.userAgent)) return ['fail', 'On a phone, "localhost" means the phone itself, not your PC.', 'Use your PC\'s Tailscale address: https://<your-pc>.<tailnet>.ts.net/ollama'];
+      if (u.hostname.endsWith('.ts.net') && !/\/ollama$/.test(u.pathname.replace(/\/+$/, ''))) return ['warn', `${u.origin}${u.pathname}`, 'Tailscale addresses for this setup normally end in /ollama.'];
+      return ['pass', `${u.origin}${u.pathname === '/' ? '' : u.pathname}`];
+    }],
+    ['2. Reach your PC (Tailscale, then the proxy, then Ollama)', async () => {
+      const t0 = performance.now(), p = await pingOllama(url, 8000); ctx.ping = p;
+      if (p.ok) return ['pass', `Ollama answered in ${Math.round(performance.now() - t0)} ms.`];
+      const cause = { network: 'No answer at all — the request never reached your PC.', 'proxy-down': 'Tailscale answered but nothing is running behind it.', 'host-rejected': 'Ollama refused the request.', 'wrong-path': 'Something answered, but not Ollama.', auth: 'Something answered, but it asks for a login.', 'not-ollama': 'Something answered, but not Ollama.', http: 'An unexpected reply came back.' }[p.kind];
+      return ['fail', `${cause}${p.timedOut ? ' (timed out after 8 s)' : ''}${p.status ? ` HTTP ${p.status}.` : ''}`, p.hint];
+    }],
+    ['3. Browser permission check (CORS preflight)', async () => {
+      try { const r = await fetch(url + '/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: cfg.model }) }); return ['pass', `The browser was allowed to send a JSON request (HTTP ${r.status}).`]; }
+      catch (e) { return ['fail', 'The server is reachable but the browser blocked the request — a CORS (permission) problem.', 'On the PC set the environment variable OLLAMA_ORIGINS to * (or this site\'s address) and restart Ollama. If you use the proxy, make sure it is the latest tools/ollama-proxy.py.']; }
+    }],
+    ['4. Models are installed', async () => {
+      const have = ctx.ping.models, miss = [cfg.model, cfg.fallback].filter(m => m && !have.includes(m));
+      return miss.length ? ['fail', `Missing: ${miss.join(', ')}. Installed: ${have.join(', ') || 'none'}.`, `On the PC run: ${miss.map(m => 'ollama pull ' + m).join('  and  ')} — or change the model names above.`] : ['pass', `${cfg.model}${cfg.fallback ? ' and fallback ' + cfg.fallback : ''} are installed.`];
+    }],
+    ['5. Model is loaded in GPU memory', async () => {
+      const r = await (await fetch(url + '/api/ps')).json().catch(() => null), m = (r?.models || []).find(x => x.name === cfg.model);
+      ctx.loaded = !!m;
+      return m ? ['pass', `${m.name}: ${(m.size_vram / 1e9).toFixed(1)} GB in GPU, context ${m.context_length}${m.expires_at ? ', stays loaded until ' + new Date(m.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}.`]
+        : ['warn', `${cfg.model} isn't in GPU memory right now.`, 'That\'s fine: the first request loads it (30–45 s when it comes from a hard drive). Tap "Load model now", or just open the Recipes tab.'];
+    }],
+    ['6. Timed test generation', async () => {
+      try {
+        const ans = await llmOnce(cfg.model, 'Reply with only the number 4.', 10, cfg.firstToken + (ctx.loaded ? 0 : cfg.coldGrace), false), s = lastStats;
+        const detail = `First word after ${s.ttft.toFixed(1)} s, finished in ${s.total.toFixed(1)} s${s.tps ? ', ' + s.tps.toFixed(0) + ' tokens/s' : ''}${s.loadSecs > 3 ? ', model load ' + s.loadSecs.toFixed(0) + ' s' : ''}. Answer: "${ans.trim().slice(0, 20)}"`;
+        if (!/4/.test(ans)) return ['warn', detail, 'The model answered, but not as expected — try again or pick another model.'];
+        if (s.ttft > cfg.firstToken && !s.loadSecs) return ['warn', detail, `Slower than your ${cfg.firstToken} s limit, so the app would switch to the fallback model. Close other programs that use the PC's GPU.`];
+        return ['pass', detail];
+      } catch (e) { return ['fail', e.message, 'If the model is cold, try "Load model now", wait a minute, and run the checks again.']; }
+    }]
+  ];
+  $('diagrun').disabled = true;
+  let stop = false;
+  for (const [title] of steps) rows.push({ title, status: 'skip', detail: '', hint: '' });
+  for (let i = 0; i < steps.length; i++) {
+    if (stop) { rows[i].detail = 'Skipped — fix the problem above first.'; continue; }
+    rows[i].status = 'run'; draw();
+    try { const [status, detail, hint] = await steps[i][1](); Object.assign(rows[i], { status, detail: detail || '', hint: hint || '' }); }
+    catch (e) { Object.assign(rows[i], { status: 'fail', detail: e.message, hint: 'Unexpected error — copy the results and send them over.' }); }
+    if (rows[i].status === 'fail' && i <= 3) stop = true;   // later steps can't work until the connection and the model do
+    draw();
+  }
+  const bad = rows.filter(r => r.status === 'fail').length, warn = rows.filter(r => r.status === 'warn').length;
+  rows.push({ title: bad ? `${bad} problem${bad > 1 ? 's' : ''} found — start with the first ❌` : warn ? 'Working, with a note above' : 'Everything works', status: bad ? 'fail' : warn ? 'warn' : 'pass', detail: '', hint: '' });
+  draw();
+  if (bad === 0) { if (ai.state !== 'online') setAi(true); } else if (rows[1].status === 'fail') setAi(false, rows[1].hint);
+  window.lastDiagText = `Use It Up diagnostics — ${new Date().toLocaleString()}\nPage: ${location.href}\nDevice: ${navigator.userAgent}\nAddress: ${cfg.url} | main ${cfg.model} | fallback ${cfg.fallback}\n\n` + rows.map(r => `${icon[r.status]} ${r.title}\n   ${r.detail}${r.hint ? '\n   -> ' + r.hint : ''}`).join('\n');
+  $('diagrun').disabled = false;
 }
 
 // ---------- notifications (best effort; the banner/summary above are the dependable reminders) ----------
