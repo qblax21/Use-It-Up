@@ -14,18 +14,18 @@
 :root{--bg:#f6f5f0;--card:#fff;--ink:#222;--mute:#777;--green:#2f7d4f;--amber:#e0a100;--red:#c8372d;--line:#e4e2da}
 @media (prefers-color-scheme:dark){:root{--bg:#161814;--card:#22251f;--ink:#eee;--mute:#999;--line:#33362e}}
 *{box-sizing:border-box}
-/* --nav-lift: extra space under the tab labels so they sit clear of the iPhone home indicator (on top of env(safe-area-inset-bottom)) */
-:root{--nav-lift:12px}
-body{margin:0;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:calc(64px + var(--nav-lift) + env(safe-area-inset-bottom) + 24px)}
+/* --nav-pad: space under the tab labels: half the iPhone home-indicator inset plus a little extra (a compromise: not jammed, not tall) */
+:root{--nav-pad:calc(env(safe-area-inset-bottom) * .5 + 6px)}
+body{margin:0;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:calc(56px + var(--nav-pad) + 24px)}
 header{background:var(--green);color:#fff;padding:calc(14px + env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 14px max(16px,env(safe-area-inset-left));font-size:20px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .aipill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:rgba(255,255,255,.2);cursor:pointer}
 .aipill:empty{display:none}
 .aipill.offline{background:#c8372d}
-#toast{position:fixed;left:50%;bottom:calc(84px + var(--nav-lift) + env(safe-area-inset-bottom));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
+#toast{position:fixed;left:50%;bottom:calc(76px + var(--nav-pad));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
 #toast.show{opacity:1}
 main{max-width:640px;margin:0 auto;padding:12px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left))}
-nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding:0 env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + var(--nav-lift)) env(safe-area-inset-left);z-index:10}
-nav button{flex:1;min-height:52px;padding:12px 4px;border:0;background:none;color:var(--mute);font-size:14px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding:0 env(safe-area-inset-right) var(--nav-pad) env(safe-area-inset-left);z-index:10}
+nav button{flex:1;min-height:50px;padding:11px 4px;border:0;background:none;color:var(--mute);font-size:14px}
 nav button.on{color:var(--green);font-weight:700}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
 .item{display:flex;align-items:center;gap:8px}
@@ -73,7 +73,55 @@ const KEY = 'useitup.items.v1', HKEY = 'useitup.hist.v1', CKEY = 'useitup.llm';
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } };
 const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 let items = load(KEY, []), hist = load(HKEY, []);
-const save = () => { put(KEY, items); put(HKEY, hist); };
+const TKEY = 'useitup.tomb', SKEY = 'useitup.sync';
+let tomb = load(TKEY, {});   // ids of deleted items -> time deleted (so a deletion on one phone reaches the others)
+const newId = () => Math.random().toString(36).slice(2, 9) + Math.random().toString(36).slice(2, 9);
+hist = hist.map(h => h.id ? h : { ...h, id: newId() });
+const saveLocal = () => { put(KEY, items); put(HKEY, hist); put(TKEY, tomb); };
+const save = () => { saveLocal(); scheduleSync(); };
+
+// ---------- shared pantry sync (small server on your PC; see tools/sync-server.py) ----------
+// Items never change after they're added, so syncing is just a union minus deletions: no conflicts.
+const syncCfg = () => load(SKEY, null);
+const sync = { status: 'off', at: 0, msg: '' };
+let syncing = false, syncAgain = false, syncTimer = 0;
+const TOMB_KEEP = 120 * 24 * 3600 * 1000;
+function mergeIn(r) {
+  const before = JSON.stringify([items.map(i => i.id).sort(), hist.length]);
+  const now = Date.now(), t = { ...tomb };
+  for (const [k, v] of Object.entries(r.tomb || {})) if (typeof v === 'number') t[k] = Math.max(t[k] || 0, v);
+  for (const k of Object.keys(t)) if (now - t[k] > TOMB_KEEP) delete t[k];
+  const im = new Map();
+  for (const i of [...(r.items || []), ...items]) if (i && i.id && !t[i.id] && !im.has(i.id)) im.set(i.id, i);
+  const hm = new Map();
+  for (const h of [...(r.hist || []), ...hist]) if (h && h.id && !hm.has(h.id)) hm.set(h.id, h);
+  tomb = t; items = [...im.values()]; hist = [...hm.values()].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const remoteIds = new Set((r.items || []).map(i => i.id));
+  const extra = items.some(i => !remoteIds.has(i.id)) || (r.hist || []).length < hist.length;
+  return { changed: before !== JSON.stringify([items.map(i => i.id).sort(), hist.length]), extra };
+}
+function scheduleSync() { if (!syncCfg()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 700); }
+async function syncNow() {
+  const c = syncCfg(); if (!c || !c.url || !c.code) { sync.status = 'off'; return; }
+  if (syncing) { syncAgain = true; return; }
+  syncing = true; sync.status = 'busy';
+  const ac = new AbortController(), to = setTimeout(() => ac.abort(), 10000);
+  try {
+    const res = await fetch(c.url.trim().replace(/\/+$/, '') + '/' + encodeURIComponent(c.code), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ items, hist, tomb }), signal: ac.signal });
+    if (!res.ok) throw new Error(res.status === 400 ? 'the pantry code looks wrong' : res.status === 502 || res.status === 503 ? "the sync server isn't running on the PC" : res.status === 404 ? 'wrong address (it should end in /sync)' : 'server said ' + res.status);
+    const r = await res.json(), m = mergeIn(r);
+    saveLocal(); sync.status = 'ok'; sync.at = Date.now(); sync.msg = '';
+    if (m.extra) syncAgain = true;   // something was added while we were talking to the server
+    if (m.changed) { if (tab === 'list') render(); else updateSoon(); }
+  } catch (e) {
+    sync.status = 'err'; sync.msg = e.name === 'AbortError' ? 'timed out (is the PC on and Tailscale connected?)' : e.message === 'Failed to fetch' || e.message === 'Load failed' ? "can't reach the PC (is Tailscale on? is the PC on?)" : e.message;
+  } finally { clearTimeout(to); syncing = false; paintSync(); if (syncAgain) { syncAgain = false; setTimeout(syncNow, 300); } }
+}
+function paintSync() { const el = document.getElementById('syncstat'); if (!el) return; const c = syncCfg();
+  el.textContent = !c ? 'Not syncing — this phone keeps its own pantry.' : sync.status === 'busy' ? 'Syncing…' : sync.status === 'ok' ? `Synced ✓ ${new Date(sync.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : sync.status === 'err' ? `Not synced: ${sync.msg}. Your changes are kept and will sync when the PC is reachable.` : 'Waiting to sync…'; }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+window.addEventListener('online', syncNow);
+setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
 // firstToken: seconds to wait for the first word before switching to the fallback model. overall: hard cap per call.
 // numCtx: context window sent to Ollama (smaller = less GPU memory; the app's prompts are short). keepAlive: how long Ollama keeps the model loaded.
 // coldGrace: extra seconds allowed when the model isn't in GPU memory yet (loading 5–10 GB from disk can take 30–45 s).
@@ -278,8 +326,8 @@ function dailySummary() {
 
 function finish(id, outcome) {
   const it = items.find(i => i.id === id); if (!it) return;
-  hist.push({ name: it.name, outcome, date: isoLocal(new Date()) });
-  items = items.filter(i => i.id !== id); save(); render();
+  hist.push({ id: newId(), name: it.name, outcome, date: isoLocal(new Date()) });
+  tomb[id] = Date.now(); items = items.filter(i => i.id !== id); save(); render();
 }
 
 function viewList() {
@@ -657,6 +705,14 @@ function viewMore() {
     <p>😋 Used up: <b>${ate}</b> &nbsp; 🗑️ Wasted: <b>${tossed}</b></p>
     ${last.length ? '<div class="muted">' + last.map(h => `${h.outcome === 'ate' ? '😋' : '🗑️'} ${esc(h.name)} <span>(${h.date})</span>`).join('<br>') + '</div>' : '<span class="muted">Nothing logged yet.</span>'}
   </div>
+  <div class="card"><b>Shared pantry (sync between phones)</b>
+    <p class="muted">Keeps one pantry on both phones through a small server on your PC (over Tailscale). Everything also stays on this phone, so it works offline and catches up later.</p>
+    <label>Sync address</label><input id="surl" value="${esc((syncCfg() || {}).url || (/\/ollama\/?$/.test(getCfg().url) ? getCfg().url.replace(/\/ollama\/?$/, '/sync') : ''))}" placeholder="https://your-pc.your-tailnet.ts.net/sync" autocapitalize="off" autocorrect="off">
+    <label>Pantry code (same on both phones)</label><input id="scode" value="${esc((syncCfg() || {}).code || '')}" placeholder="tap “New code” on the first phone" autocapitalize="off" autocorrect="off">
+    <div class="row"><button class="b" id="ssave">Save &amp; sync</button><button class="b alt" id="snew">New code</button></div>
+    <div class="row"><button class="b alt" id="sinv">Copy invite link</button><button class="b alt" id="soff">Stop syncing</button></div>
+    <div id="syncstat" class="muted"></div>
+  </div>
   <div class="card"><b>AI helper (Ollama on your PC)</b>
     <p class="muted">Tailored recipes and shelf-life estimates run on your own computer — nothing leaves your network and there's no key. On the PC itself the default address works. On a phone, enter your PC's address (see the README).</p>
     <label>Ollama address</label><input id="curl" value="${esc(getCfg().url)}" autocapitalize="off" autocorrect="off">
@@ -681,6 +737,20 @@ function viewMore() {
   const standalone = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
   $('nstat').innerHTML = [`Notifications API: ${'Notification' in window ? 'yes' : 'no'}`, `permission: ${'Notification' in window ? Notification.permission : 'n/a'}`, `installed app: ${standalone ? 'yes' : 'no (open it from the Home Screen icon)'}`,
     `service worker: ${'serviceWorker' in navigator ? 'yes' : 'no'}`, `background push: not set up (needs a server)`, `icon badge: ${'setAppBadge' in navigator ? 'yes' : 'no'}`].join(' · ');
+  paintSync();
+  $('snew').onclick = () => { const a = new Uint8Array(24); crypto.getRandomValues(a); $('scode').value = Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join(''); };
+  $('ssave').onclick = () => {
+    const url = $('surl').value.trim(), code = $('scode').value.trim();
+    if (!/^https?:\/\//.test(url)) { $('syncstat').textContent = 'Enter the sync address first (it starts with https://).'; return; }
+    if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) { $('syncstat').textContent = 'The pantry code must be 16–64 letters/numbers. Tap “New code” on the first phone and type the same code on the other.'; return; }
+    put(SKEY, { url, code }); sync.status = 'busy'; paintSync(); syncNow();
+  };
+  $('soff').onclick = () => { try { localStorage.removeItem(SKEY); } catch (e) {} sync.status = 'off'; paintSync(); };
+  $('sinv').onclick = async () => {
+    const c = syncCfg(); if (!c) { $('syncstat').textContent = 'Save & sync first, then copy the invite.'; return; }
+    const link = location.href.split('#')[0] + '#join=' + encodeURIComponent(c.url + '|' + c.code);
+    try { await navigator.clipboard.writeText(link); $('sinv').textContent = 'Copied ✓'; } catch (e) { $('syncstat').insertAdjacentHTML('beforeend', `<br><textarea style="width:100%;height:90px" readonly>${esc(link)}</textarea>`); }
+  };
   $('csave').onclick = async () => {
     const url = $('curl').value.trim() || 'http://localhost:11434', model = $('cmodel').value.trim() || 'qwen2.5:14b';
     const fallback = $('cfall').value.trim(), firstToken = Math.max(5, +$('ctime').value || 15);
@@ -800,6 +870,12 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) naviga
 render();
 remind();   // after render, so a notification problem can never leave the app blank
 $('aipill').onclick = () => go('more');
+(function joinFromLink() {
+  const m = /^#join=(.+)$/.exec(location.hash); if (!m) return;
+  try { const [url, code] = decodeURIComponent(m[1]).split('|'); history.replaceState(null, '', location.pathname + location.search);
+    if (url && /^[A-Za-z0-9_-]{16,64}$/.test(code || '') && confirm('Join the shared pantry?\n' + url)) put(SKEY, { url, code }); } catch (e) {}
+})();
+syncNow();   // pull the shared pantry (if sync is set up)
 checkAI();  // learn whether the AI is reachable (starts the background retry if not)
 </script>
 </body>

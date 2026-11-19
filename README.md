@@ -46,3 +46,19 @@ loaded for 30 minutes; the model is also pre-loaded when you open the Recipes ta
 
 The PC must be on and awake, and the Tailscale app must be connected on the phone.
 Without any of this, everything else (pantry, scanning, TheMealDB recipes) still works on the phone.
+
+## Shared pantry (two phones, one pantry)
+
+By default each phone keeps its own pantry in its browser storage. To share one pantry, run the tiny sync server on the PC
+(`tools/sync-server.py`, standard-library Python, loopback only) behind the same Tailscale proxy:
+
+1. `powershell -ExecutionPolicy Bypass -File tools\install-sync-autostart.ps1` (installs to `%LOCALAPPDATA%\UseItUp`,
+   starts at login, restarts itself; pantry data is a small JSON file in `%LOCALAPPDATA%\UseItUp\sync-data`).
+2. `tailscale serve --bg --set-path /sync http://127.0.0.1:11437`
+3. On phone 1: **More → Shared pantry**, address `https://<your-pc>.<tailnet>.ts.net/sync`, tap **New code**, **Save & sync**.
+   On phone 2 (must be on the same tailnet, or have the PC shared to it): enter the same address and code. The invite link
+   works too if opened inside the app.
+
+Items never change after they're added, so merging is a union minus deletions (deletions are remembered for 120 days) — no
+conflicts. Each phone keeps working offline and catches up on the next sync (on open, every minute while open, after each change).
+The pantry code is the only password, so treat it like one; the server is reachable only inside your tailnet.
