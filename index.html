@@ -53,12 +53,15 @@ video{width:100%;border-radius:12px;background:#000}
 .soonbar.red{background:#f8d7da;color:#721c24;border-bottom-color:#efb7bd}
 .sum{border-left:4px solid var(--amber)}
 .sum div{margin:3px 0}
+#joinbox{max-width:640px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left))}
+.card.join{border:2px solid var(--green)}
 </style>
 </head>
 <body>
 <header><span>🥕 Use It Up</span><span id="aipill" class="aipill"></span></header>
 <div id="toast"></div>
 <div id="soon" class="hide" role="button" tabindex="0"></div>
+<div id="joinbox"></div>
 <main id="main"></main>
 <nav>
   <button data-t="list">Pantry</button>
@@ -870,11 +873,28 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) naviga
 render();
 remind();   // after render, so a notification problem can never leave the app blank
 $('aipill').onclick = () => go('more');
-(function joinFromLink() {
+// Invite links (#join=<url>|<code>) ask in the page itself, not with confirm(): iOS home-screen apps can swallow
+// confirm() dialogs, and an in-page card can be tested automatically.
+function joinFromLink() {
   const m = /^#join=(.+)$/.exec(location.hash); if (!m) return;
-  try { const [url, code] = decodeURIComponent(m[1]).split('|'); history.replaceState(null, '', location.pathname + location.search);
-    if (url && /^[A-Za-z0-9_-]{16,64}$/.test(code || '') && confirm('Join the shared pantry?\n' + url)) put(SKEY, { url, code }); } catch (e) {}
-})();
+  let url = '', code = '';
+  try { [url, code] = decodeURIComponent(m[1]).split('|'); } catch (e) {}
+  history.replaceState(null, '', location.pathname + location.search);
+  const box = $('joinbox');
+  if (!/^https?:\/\//.test(url || '') || !/^[A-Za-z0-9_-]{16,64}$/.test(code || '')) {
+    box.innerHTML = `<div class="card join"><b>That invite link is broken</b><div class="muted">Ask for a fresh one: More → Shared pantry → Copy invite link.</div><div class="row"><button class="b alt" id="jno">OK</button></div></div>`;
+  } else {
+    const cur = syncCfg(), same = cur && cur.url === url && cur.code === code;
+    box.innerHTML = `<div class="card join"><b>${same ? 'Already joined ✓' : 'Join the shared pantry?'}</b>
+      <div class="muted">Server: ${esc(url)}</div>
+      ${same ? '' : `<div class="muted" style="margin-top:4px">${items.length ? `The ${items.length} item${items.length > 1 ? 's' : ''} already on this phone will be added to the shared pantry.` : 'This phone will show the shared pantry.'}${cur ? ' This replaces the pantry this phone syncs with now.' : ''}</div>`}
+      <div class="row">${same ? '<button class="b" id="jno">OK</button>' : '<button class="b" id="jyes">Join</button><button class="b alt" id="jno">Not now</button>'}</div></div>`;
+    if ($('jyes')) $('jyes').onclick = () => { put(SKEY, { url, code }); box.innerHTML = ''; toast('Joined — syncing…'); sync.status = 'busy'; paintSync(); syncNow(); };
+  }
+  $('jno').onclick = () => { box.innerHTML = ''; };
+}
+joinFromLink();
+window.addEventListener('hashchange', joinFromLink);   // invite opened while the app is already open
 syncNow();   // pull the shared pantry (if sync is set up)
 checkAI();  // learn whether the AI is reachable (starts the background retry if not)
 </script>
