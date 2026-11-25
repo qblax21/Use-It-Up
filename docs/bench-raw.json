@@ -1,0 +1,344 @@
+{
+ "when": "2026-11-25 15:53",
+ "reps": 3,
+ "models": {
+  "qwen2.5:14b": {
+   "cold": {
+    "first_request_s": 111.77998079999816,
+    "load_s": 111.5447849,
+    "vram_gb": 9.075834223
+   },
+   "runs": {
+    "chicken-veg": [
+     {
+      "ttft": 0.16988119995221496,
+      "total": 3.6701069999253377,
+      "tokens": 122,
+      "tps": 34.85437442397433,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken and Broccoli Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Garlic powder\"]},{\"name\":\"Broccoli and Bell Pepper Rice Bowl\",\"ingredients\":[\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Oregano\"]},{\"name\":\"Leftover Chicken and Broccoli Soup\",\"ingredients\":[\"Cooked chicken and broccoli stir-fry\",\"Water\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Thyme\"]}]}"
+     },
+     {
+      "ttft": 0.03888220002409071,
+      "total": 3.3408382000634447,
+      "tokens": 115,
+      "tps": 34.828811846884065,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken and Broccoli Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Garlic powder\"]},{\"name\":\"Broccoli and Bell Pepper Rice Bowl\",\"ingredients\":[\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Leftover Chicken and Broccoli Soup\",\"ingredients\":[\"Cooked chicken and broccoli stir-fry\",\"Water\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.03972279990557581,
+      "total": 3.561559399939142,
+      "tokens": 122,
+      "tps": 34.63941926161819,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken and Broccoli Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Garlic powder\"]},{\"name\":\"Broccoli and Bell Pepper Rice Bowl\",\"ingredients\":[\"Broccoli\",\"Bell pepper\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Oregano\"]},{\"name\":\"Leftover Chicken and Broccoli Soup\",\"ingredients\":[\"Cooked chicken and broccoli stir-fry\",\"Water\",\"Rice\",\"Soy sauce\",\"Oil\",\"Salt\",\"Pepper\",\"Thyme\"]}]}"
+     }
+    ],
+    "breakfast": [
+     {
+      "ttft": 0.18316720006987453,
+      "total": 3.7330550000770018,
+      "tokens": 123,
+      "tps": 34.64850221285617,
+      "valid_json": true,
+      "usable": false,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Toast with Spiced Milk\",\"ingredients\":[\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\",\"Common spices\"]},{\"name\":\"Cheesy Spinach Toast\",\"ingredients\":[\"Spinach\",\"Bread\",\"Cheddar cheese\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Repurposed Spinach and Bread Soup\",\"instructions\":\"Reheat the Spinach and Bread Soup with a splash of milk and a sprinkle of pepper for extra flavor.\"}]}"
+     },
+     {
+      "ttft": 0.055700100027024746,
+      "total": 2.4328830000013113,
+      "tokens": 83,
+      "tps": 34.91326367506267,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Toast with Milk\",\"ingredients\":[\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Leftover Spinach Soup Repurposed\",\"ingredients\":[\"Leftover Spinach Soup\",\"Bread\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.03675530001055449,
+      "total": 2.3532111999811605,
+      "tokens": 81,
+      "tps": 34.96453689470883,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Toast with Spinach Pesto\",\"ingredients\":[\"Spinach\",\"Bread\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Leftover Spinach and Bread Soup as a Dip\",\"ingredients\":[\"Spinach and Bread Soup\",\"Bread\"]}]}"
+     }
+    ],
+    "leftovers": [
+     {
+      "ttft": 0.17978500004392117,
+      "total": 3.244054100010544,
+      "tokens": 106,
+      "tps": 34.59518735252169,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potato and Carrot Patties\",\"ingredients\":[\"mashed potatoes [cooked leftover]\",\"carrots\",\"oil\",\"salt\",\"pepper\"]},{\"name\":\"Chicken and Carrot Stir-Fry\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"carrots\",\"oil\",\"salt\",\"pepper\",\"water\"]},{\"name\":\"Roasted Chicken and Potato Soup\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"mashed potatoes [cooked leftover]\",\"oil\",\"salt\",\"pepper\",\"water\"]}]}"
+     },
+     {
+      "ttft": 0.042341799940913916,
+      "total": 2.9815255999565125,
+      "tokens": 101,
+      "tps": 34.367266301738475,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potato Pancakes\",\"ingredients\":[\"mashed potatoes [cooked leftover]\",\"oil\",\"salt\",\"pepper\"]},{\"name\":\"Chicken and Carrot Stir-Fry\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"carrots\",\"oil\",\"salt\",\"pepper\",\"common spices\"]},{\"name\":\"Roasted Chicken and Potato Soup\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"mashed potatoes [cooked leftover]\",\"water\",\"oil\",\"salt\",\"pepper\"]}]}"
+     },
+     {
+      "ttft": 0.14207489998079836,
+      "total": 3.0067897000117227,
+      "tokens": 98,
+      "tps": 34.084715822159865,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potato Pancakes\",\"ingredients\":[\"mashed potatoes [cooked leftover]\",\"oil\",\"pepper\"]},{\"name\":\"Chicken and Carrot Stir-Fry\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"carrots\",\"oil\",\"salt\",\"pepper\",\"common spices\"]},{\"name\":\"Leftover Chicken Soup\",\"ingredients\":[\"roast chicken [cooked leftover]\",\"water\",\"carrots\",\"onion\",\"oil\",\"salt\",\"pepper\",\"common spices\"]}]}"
+     }
+    ],
+    "pasta": [
+     {
+      "ttft": 0.18160639994312078,
+      "total": 4.683717799955048,
+      "tokens": 155,
+      "tps": 34.42758257955437,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spaghetti with Tomato and Ground Beef\",\"ingredients\":[\"Ground beef: 0 days left\",\"Tomato: 1 days left\",\"Garlic: 15 days left\",\"Pasta: 120 days left\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Tomato and Garlic Soup\",\"ingredients\":[\"Tomato: 1 days left\",\"Garlic: 15 days left\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Leftover Spaghetti Repurposed\",\"ingredients\":[\"Spaghetti with Tomato and Ground Beef\",\"Oil\",\"Salt\",\"Pepper\"],\"instructions\":\"Reheat the spaghetti in a pan with a little oil and season with salt and pepper. Optionally, add a crushed garlic clove for extra flavor.\"}]}"
+     },
+     {
+      "ttft": 0.038451400003395975,
+      "total": 3.2978984999936074,
+      "tokens": 113,
+      "tps": 34.668670290821055,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Beef and Tomato Pasta\",\"ingredients\":[\"Ground beef: 0 days left\",\"Tomato: 1 days left\",\"Pasta: 120 days left\",\"Garlic: 15 days left\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Garlic Infused Oil\",\"ingredients\":[\"Garlic: 15 days left\",\"Oil\"]},{\"name\":\"Tomato and Beef Soup\",\"ingredients\":[\"Ground beef: 0 days left\",\"Tomato: 1 days left\",\"Water\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.03893959999550134,
+      "total": 3.617492499994114,
+      "tokens": 124,
+      "tps": 34.64934720909288,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Beef and Tomato Pasta\",\"ingredients\":[\"Ground beef: 0 days left\",\"Tomato: 1 days left\",\"Pasta: 120 days left\",\"Garlic: 15 days left\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Garlic and Tomato Soup\",\"ingredients\":[\"Tomato: 1 days left\",\"Garlic: 15 days left\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Reheated Beef and Tomato Pasta\",\"ingredients\":[\"Beef and Tomato Pasta (from previous meal)\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     }
+    ],
+    "odd-mix": [
+     {
+      "ttft": 0.18251800001598895,
+      "total": 2.7702303999103606,
+      "tokens": 90,
+      "tps": 34.77992039262666,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Smoothie\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Water\",\"Pepper\"]},{\"name\":\"Zucchini Stir-Fry\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Greek yogurt\",\"Salt\",\"Pepper\",\"Oil\",\"Common spices\"]},{\"name\":\"Repurposed Stir-Fry\",\"ingredients\":[\"Leftover zucchini stir-fry\",\"Tortillas\",\"Greek yogurt\",\"Salt\",\"Pepper\",\"Oil\"]}]}"
+     },
+     {
+      "ttft": 0.039302999968640506,
+      "total": 2.4192448999965563,
+      "tokens": 83,
+      "tps": 34.86967145207395,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Smoothie\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Water\",\"Pepper\"]},{\"name\":\"Zucchini Fritters\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\",\"Common spices\"]},{\"name\":\"Greek Yogurt and Banana Parfait\",\"ingredients\":[\"Greek yogurt\",\"Banana\",\"Oil\",\"Salt\",\"Pepper\",\"Common spices\"]}]}"
+     },
+     {
+      "ttft": 0.036926900036633015,
+      "total": 2.301421400043182,
+      "tokens": 78,
+      "tps": 34.445313428063834,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Smoothie\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Water\",\"Pepper\"]},{\"name\":\"Zucchini Fritters\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\",\"Common spices\"]},{\"name\":\"Greek Yogurt and Banana Parfait\",\"ingredients\":[\"Greek yogurt\",\"Banana\",\"Oil\",\"Pepper\"]}]}"
+     }
+    ]
+   }
+  },
+  "qwen2.5:7b": {
+   "cold": {
+    "first_request_s": 41.46824819990434,
+    "load_s": 41.297902,
+    "vram_gb": 4.635859352
+   },
+   "runs": {
+    "chicken-veg": [
+     {
+      "ttft": 0.08707219990901649,
+      "total": 1.3191508000018075,
+      "tokens": 83,
+      "tps": 67.3592496017283,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken Breast Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Broccoli and Bell Pepper Soup\",\"ingredients\":[\"Broccoli\",\"Bell pepper\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Chicken Breast Fried Rice\",\"ingredients\":[\"Chicken breast\",\"Rice\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.022430900018662214,
+      "total": 1.1694582999916747,
+      "tokens": 77,
+      "tps": 67.1206463108052,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken Breast Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Broccoli Soup\",\"ingredients\":[\"Broccoli\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Chicken Breast Fried Rice\",\"ingredients\":[\"Chicken breast\",\"Rice\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.02310989995021373,
+      "total": 1.1637160000391304,
+      "tokens": 77,
+      "tps": 67.50844732324623,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Chicken Breast Stir-Fry\",\"ingredients\":[\"Chicken breast\",\"Broccoli\",\"Bell pepper\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Broccoli Soup\",\"ingredients\":[\"Broccoli\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Chicken Breast Fried Rice\",\"ingredients\":[\"Chicken breast\",\"Rice\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     }
+    ],
+    "breakfast": [
+     {
+      "ttft": 0.08828059991355985,
+      "total": 1.303729899926111,
+      "tokens": 80,
+      "tps": 65.81962296874472,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Milk and Bread French Toast\",\"ingredients\":[\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Egg-Free Scrambled Spinach\",\"ingredients\":[\"Spinach\",\"Oil\",\"Salt\",\"Pepper\"]}] }"
+     },
+     {
+      "ttft": 0.02296039997600019,
+      "total": 1.2091300999745727,
+      "tokens": 80,
+      "tps": 67.43793181350713,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Milk and Bread Toast\",\"ingredients\":[\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Milk and Spinach Smoothie\",\"ingredients\":[\"Spinach\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.02170100004877895,
+      "total": 1.2707906999858096,
+      "tokens": 83,
+      "tps": 66.4453423015866,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Spinach and Bread Soup\",\"ingredients\":[\"Spinach\",\"Bread\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Milk and Bread French Toast\",\"ingredients\":[\"Bread\",\"Milk\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Scrambled Eggs with Spinach\",\"ingredients\":[\"Eggs\",\"Spinach\",\"Oil\",\"Salt\",\"Pepper\"]}] }"
+     }
+    ],
+    "leftovers": [
+     {
+      "ttft": 0.10403639997821301,
+      "total": 1.4006059999810532,
+      "tokens": 85,
+      "tps": 65.55359237542311,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potato and Roast Chicken Hash\",\"ingredients\":[\"mashed potatoes\",\"roast chicken\",\"oil\",\"salt\",\"pepper\",\"water\"]},{\"name\":\"Leftover Roast Chicken Soup\",\"ingredients\":[\"roast chicken\",\"water\",\"salt\",\"pepper\"]},{\"name\":\"Carrot and Onion Soup\",\"ingredients\":[\"carrots\",\"onion\",\"oil\",\"salt\",\"pepper\",\"water\"]}] }"
+     },
+     {
+      "ttft": 0.023870799923315644,
+      "total": 0.9734328999184072,
+      "tokens": 64,
+      "tps": 67.39949576752228,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potatoes with Roast Chicken\",\"ingredients\":[\"mashed potatoes\",\"roast chicken\"]},{\"name\":\"Chicken Soup\",\"ingredients\":[\"roast chicken\",\"water\",\"salt\",\"pepper\"]},{\"name\":\"Carrot Soup\",\"ingredients\":[\"carrots\",\"water\",\"salt\",\"pepper\"]}]}"
+     },
+     {
+      "ttft": 0.022469200077466667,
+      "total": 1.1316550000337884,
+      "tokens": 74,
+      "tps": 66.7152305461994,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Mashed Potato and Roast Chicken Hash\",\"ingredients\":[\"mashed potatoes\",\"roast chicken\"]},{\"name\":\"Leftover Roast Chicken Soup\",\"ingredients\":[\"roast chicken\",\"water\",\"salt\",\"pepper\"]},{\"name\":\"Carrot and Onion Stew\",\"ingredients\":[\"carrots\",\"onion\",\"water\",\"salt\",\"pepper\"]}]}"
+     }
+    ],
+    "pasta": [
+     {
+      "ttft": 0.0890624999301508,
+      "total": 1.382211499963887,
+      "tokens": 86,
+      "tps": 66.48648314335723,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Ground Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Tomato\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Tomato Garlic Pasta\",\"ingredients\":[\"Tomato\",\"Garlic\",\"Pasta\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Leftover Ground Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Tomato\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]}]}"
+     },
+     {
+      "ttft": 0.025167600018903613,
+      "total": 1.2861427000025287,
+      "tokens": 83,
+      "tps": 65.82088155572015,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Tomato\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Tomato Garlic Pasta\",\"ingredients\":[\"Tomato\",\"Garlic\",\"Pasta\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Leftover Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]}] }"
+     },
+     {
+      "ttft": 0.022480900050140917,
+      "total": 1.3835672000423074,
+      "tokens": 91,
+      "tps": 66.86456618857278,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Tomato\",\"Garlic\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Tomato Garlic Pasta\",\"ingredients\":[\"Tomato\",\"Garlic\",\"Pasta\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Leftover Beef Stir-Fry\",\"ingredients\":[\"Ground beef\",\"Tomato\",\"Garlic\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]}]}"
+     }
+    ],
+    "odd-mix": [
+     {
+      "ttft": 0.09005389991216362,
+      "total": 1.000890399911441,
+      "tokens": 61,
+      "tps": 66.98195769595243,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Pancakes\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Tortillas\"]},{\"name\":\"Zucchini Frittata\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Black beans\"]},{\"name\":\"Greek Yogurt Soup\",\"ingredients\":[\"Greek yogurt\",\"Black beans\"]}]}"
+     },
+     {
+      "ttft": 0.023681499995291233,
+      "total": 1.1852253000251949,
+      "tokens": 77,
+      "tps": 66.28165917626531,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Pancakes\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Zucchini Fritters\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\"]},{\"name\":\"Black Bean Soup\",\"ingredients\":[\"Black beans\",\"Water\",\"Salt\",\"Pepper\"]}]}"
+     },
+     {
+      "ttft": 0.03468989999964833,
+      "total": 1.2267388000618666,
+      "tokens": 79,
+      "tps": 66.26877440515386,
+      "valid_json": true,
+      "usable": true,
+      "done_reason": "stop",
+      "raw": "{\"recipes\":[{\"name\":\"Banana Pancakes\",\"ingredients\":[\"Banana\",\"Greek yogurt\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Zucchini Fritters\",\"ingredients\":[\"Zucchini\",\"Tortillas\",\"Oil\",\"Salt\",\"Pepper\",\"Water\"]},{\"name\":\"Black Bean Soup\",\"ingredients\":[\"Black beans\",\"Water\",\"Salt\",\"Pepper\"]}]}"
+     }
+    ]
+   }
+  }
+ }
+}
