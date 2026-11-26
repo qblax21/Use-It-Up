@@ -60,7 +60,7 @@ The models stay on D:. All measurements below are of qwen2.5:14b with `num_ctx` 
 | **After:** preloaded at login (`tools\ollama-preload.ps1`) | **0.3 s** (total 0.4 s) | The model is already in GPU memory when the phone asks. |
 
 **What changed**
-- **Preload at login:** `tools\install-preload-autostart.ps1` puts `UseItUp-Preload.vbs` in the Startup folder. After login it waits for Ollama and loads qwen2.5:14b with `keep_alive` 4h. It also reloads at **11:30 and 16:30** if the model was unloaded, so it's warm before lunch and dinner. Log: `%LOCALAPPDATA%\UseItUp\preload.log`.
+- **Preload at login:** `tools\install-preload-autostart.ps1` puts `UseItUp-Preload.vbs` in the Startup folder. After login it waits for Ollama and loads qwen2.5:14b with `keep_alive` 4h. It also reloads at **11:30 and 16:30** if the model was unloaded, so it's warm before lunch and dinner. Log: `%USERPROFILE%\UseItUp\preload.log`.
 - **keep_alive 4h (was 30m):** every request resets Ollama's unload timer to *that request's* keep_alive. I saw this in testing: a test request with `5m` cut the preloader's 4 h down to 5 minutes. So the app's default is now `4h`. Phones that had the old default `30m` saved are moved to 4h automatically. Any other value someone typed in is kept.
 - **Longer cold allowance:** `coldGrace` went from 60 s to 150 s and the per-call cap from 180 s to 300 s. A cold 14b now waits about 2 minutes instead of falling back to a 7b that also has to load from disk.
 - **"Warming up AI…" state:** when the model isn't loaded, the header pill shows an amber **AI warming up…**. The Recipes card shows **⏳ Warming up AI…** with a seconds counter, and a toast says **AI is warmed up and ready** when it's done. The shelf-life button shows the same message.

@@ -1,11 +1,11 @@
 # Installs the Ollama Host-header proxy so it starts at login and restarts itself if it ever stops (Windows).
 #   powershell -ExecutionPolicy Bypass -File tools\install-proxy-autostart.ps1 [-ListenPort 11436] [-OllamaPort 11434]
-# - Copies ollama-proxy.py to %LOCALAPPDATA%\UseItUp (C:, so it doesn't depend on another drive being ready at login)
+# - Copies ollama-proxy.py to %USERPROFILE%\UseItUp (C:, so it doesn't depend on another drive being ready at login; not under AppData, which some sandboxed apps see a private copy of)
 # - Writes a tiny supervisor .vbs into your Startup folder (delete UseItUp-Ollama-Proxy.vbs to remove autostart)
 param([int]$ListenPort = 11436, [int]$OllamaPort = 11434)
 $ErrorActionPreference = 'Stop'
 
-$dir = Join-Path $env:LOCALAPPDATA 'UseItUp'
+$dir = Join-Path $env:USERPROFILE 'UseItUp'
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'ollama-proxy.py') (Join-Path $dir 'ollama-proxy.py') -Force
 

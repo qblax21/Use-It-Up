@@ -1,11 +1,11 @@
 # Makes Windows load the recipe model into GPU memory at login (and before lunch/dinner), so the first
 # request from a phone doesn't wait about 2 minutes for the model to come off the D: hard disk.
 #   powershell -ExecutionPolicy Bypass -File tools\install-preload-autostart.ps1 [-Model qwen2.5:14b] [-KeepAlive 4h] [-WarmAt '11:30,16:30']
-# Delete UseItUp-Preload.vbs from your Startup folder to turn it off. Log: %LOCALAPPDATA%\UseItUp\preload.log
+# Delete UseItUp-Preload.vbs from your Startup folder to turn it off. Log: %USERPROFILE%\UseItUp\preload.log
 param([string]$Model = 'qwen2.5:14b', [string]$KeepAlive = '4h', [string]$WarmAt = '11:30,16:30')
 $ErrorActionPreference = 'Stop'
 
-$dir = Join-Path $env:LOCALAPPDATA 'UseItUp'
+$dir = Join-Path $env:USERPROFILE 'UseItUp'
 New-Item -ItemType Directory -Force $dir | Out-Null
 $script = Join-Path $dir 'ollama-preload.ps1'
 Copy-Item (Join-Path $PSScriptRoot 'ollama-preload.ps1') $script -Force

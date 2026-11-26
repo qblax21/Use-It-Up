@@ -56,6 +56,7 @@ video{width:100%;border-radius:12px;background:#000}
 .sum div{margin:3px 0}
 #joinbox{max-width:640px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left))}
 .card.join{border:2px solid var(--green)}
+.syncwarn{background:#fff3cd;color:#5c4400;border-radius:10px;padding:6px 10px;margin:6px 0;font-size:13px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -87,7 +88,18 @@ const save = () => { saveLocal(); scheduleSync(); };
 // ---------- shared pantry sync (small server on your PC; see tools/sync-server.py) ----------
 // Items never change after they're added, so syncing is just a union minus deletions: no conflicts.
 const syncCfg = () => load(SKEY, null);
-const sync = { status: 'off', at: 0, msg: '' };
+// lastOk / failSince are kept across app restarts so "Last synced" and the "failing for X min" warning stay honest.
+const sync = { status: 'off', at: 0, msg: '', ...load('useitup.syncstate', {}) };
+const SYNC_WARN_MS = 10 * 60e3;
+const keepSyncState = () => put('useitup.syncstate', { lastOk: sync.lastOk || 0, failSince: sync.failSince || 0 });
+const syncFailingLong = () => !!syncCfg() && sync.status === 'err' && sync.failSince && Date.now() - sync.failSince > SYNC_WARN_MS;
+function whenStr(t) {
+  if (!t) return 'never';
+  const d = new Date(t), time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (isoLocal(d) === isoLocal(new Date())) return time;
+  if (isoLocal(d) === isoLocal(new Date(Date.now() - DAY))) return 'yesterday ' + time;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+}
 let syncing = false, syncAgain = false, syncTimer = 0;
 const TOMB_KEEP = 120 * 24 * 3600 * 1000;
 function mergeIn(r) {
@@ -114,15 +126,27 @@ async function syncNow() {
     const res = await fetch(c.url.trim().replace(/\/+$/, '') + '/' + encodeURIComponent(c.code), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ items, hist, tomb }), signal: ac.signal });
     if (!res.ok) throw new Error(res.status === 400 ? 'the pantry code looks wrong' : res.status === 502 || res.status === 503 ? "the sync server isn't running on the PC" : res.status === 404 ? 'wrong address (it should end in /sync)' : 'server said ' + res.status);
     const r = await res.json(), m = mergeIn(r);
-    saveLocal(); sync.status = 'ok'; sync.at = Date.now(); sync.msg = '';
+    saveLocal(); sync.status = 'ok'; sync.at = sync.lastOk = Date.now(); sync.msg = ''; sync.failSince = 0; keepSyncState();
     if (m.extra) syncAgain = true;   // something was added while we were talking to the server
     if (m.changed) { if (tab === 'list') render(); else updateSoon(); }
   } catch (e) {
+    if (!sync.failSince) { sync.failSince = Date.now(); keepSyncState(); }
     sync.status = 'err'; sync.msg = e.name === 'AbortError' ? 'timed out (is the PC on and Tailscale connected?)' : e.message === 'Failed to fetch' || e.message === 'Load failed' ? "can't reach the PC (is Tailscale on? is the PC on?)" : e.message;
   } finally { clearTimeout(to); syncing = false; paintSync(); if (syncAgain) { syncAgain = false; setTimeout(syncNow, 300); } }
 }
-function paintSync() { const el = document.getElementById('syncstat'); if (!el) return; const c = syncCfg();
-  el.textContent = !c ? 'Not syncing — this phone keeps its own pantry.' : sync.status === 'busy' ? 'Syncing…' : sync.status === 'ok' ? `Synced ✓ ${new Date(sync.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : sync.status === 'err' ? `Not synced: ${sync.msg}. Your changes are kept and will sync when the PC is reachable.` : 'Waiting to sync…'; }
+function paintSync() {
+  const w = $('syncwarn');   // small warning on the Pantry tab
+  if (w) w.innerHTML = syncFailingLong() ? `<div class="syncwarn" id="syncwarnbtn">⚠️ Not synced for ${Math.round((Date.now() - sync.failSince) / 60e3)} min — changes stay on this phone. Last synced: ${esc(whenStr(sync.lastOk))}</div>` : '';
+  if ($('syncwarnbtn')) $('syncwarnbtn').onclick = () => go('more');
+  const el = $('syncstat'); if (!el) return; const c = syncCfg();
+  if (!c) { el.textContent = 'Not syncing — this phone keeps its own pantry.'; return; }
+  const last = `Last synced: <b>${esc(whenStr(sync.lastOk))}</b>`;
+  el.innerHTML = sync.status === 'busy' ? `Syncing… · ${last}`
+    : sync.status === 'ok' ? `${last} ✓`
+    : sync.status === 'err' ? `${last}<br>Not synced right now: ${esc(sync.msg)}. Your changes are kept on this phone and will sync when the PC is reachable.`
+      + (syncFailingLong() ? `<div class="syncwarn">⚠️ Sync has been failing for ${Math.round((Date.now() - sync.failSince) / 60e3)} minutes. Check that Tailscale is on and the PC is awake.</div>` : '')
+    : `Waiting to sync… · ${last}`;
+}
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
 window.addEventListener('online', syncNow);
 setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
@@ -349,14 +373,14 @@ function finish(id, outcome) {
 
 function viewList() {
   const sorted = [...items].sort((a, b) => a.expires.localeCompare(b.expires));
-  let h = dailySummary();
+  let h = '<div id="syncwarn"></div>' + dailySummary();
   if (!sorted.length) h += `<p class="muted">Nothing here yet. Tap <b>Add</b> to scan groceries or log leftovers.</p>`;
   h += sorted.map(i => `<div class="card item">
     <div class="name">${i.leftover ? '🍱 ' : ''}${esc(i.name)}${i.qty ? ` <span class="qty">×${esc(i.qty)}</span>` : ''}</div>${badge(i.expires)}
     <button class="x" title="Ate it" data-ate="${i.id}">😋</button>
     <button class="x" title="Threw it out" data-toss="${i.id}">🗑️</button></div>`).join('');
   if (sorted.length) h += `<p class="muted">😋 = ate it · 🗑️ = threw it out</p>`;
-  main.innerHTML = h;
+  main.innerHTML = h; paintSync();
   if ($('sumok')) $('sumok').onclick = () => { put('useitup.sumdone', isoLocal(new Date())); viewList(); };
   main.querySelectorAll('[data-ate]').forEach(b => b.onclick = () => finish(b.dataset.ate, 'ate'));
   main.querySelectorAll('[data-toss]').forEach(b => b.onclick = () => finish(b.dataset.toss, 'tossed'));

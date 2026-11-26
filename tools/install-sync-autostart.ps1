@@ -1,12 +1,12 @@
 # Installs the Use It Up pantry sync server so it starts at login and restarts itself if it stops (Windows).
 #   powershell -ExecutionPolicy Bypass -File tools\install-sync-autostart.ps1 [-Port 11437]
-# - Copies sync-server.py to %LOCALAPPDATA%\UseItUp; pantry data lives in %USERPROFILE%\UseItUpData (a few KB)
+# - Copies sync-server.py to %USERPROFILE%\UseItUp; pantry data lives in %USERPROFILE%\UseItUpData (a few KB)
 # - Writes a supervisor .vbs into your Startup folder (delete UseItUp-Sync.vbs to remove autostart)
 # - Then add the Tailscale path route once:  tailscale serve --bg --set-path /sync http://127.0.0.1:11437
 param([int]$Port = 11437)
 $ErrorActionPreference = 'Stop'
 
-$dir = Join-Path $env:LOCALAPPDATA 'UseItUp'
+$dir = Join-Path $env:USERPROFILE 'UseItUp'
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'sync-server.py') (Join-Path $dir 'sync-server.py') -Force
 $data = Join-Path $env:USERPROFILE 'UseItUpData'   # outside AppData: store-style Pythons can see a private copy of AppData

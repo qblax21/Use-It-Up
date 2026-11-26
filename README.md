@@ -31,7 +31,7 @@ live in settings). Timings and quality: [docs/benchmarks.md](docs/benchmarks.md)
 **Warm at login (recommended):** run `powershell -ExecutionPolicy Bypass -File tools\install-preload-autostart.ps1` once.
 It loads qwen2.5:14b into GPU memory at every login and again at 11:30 and 16:30 if it was unloaded, so the first request
 from a phone takes well under a second instead of about 2 minutes. While loaded it holds about 9 GB of the 12 GB GPU; run
-`ollama stop qwen2.5:14b` to free it. Log: `%LOCALAPPDATA%\UseItUp\preload.log`.
+`ollama stop qwen2.5:14b` to free it. Log: `%USERPROFILE%\UseItUp\preload.log`.
 
 **On the PC itself** it works as-is (Chrome/Edge allow the HTTPS page to call `localhost`).
 
@@ -43,7 +43,7 @@ from a phone takes well under a second instead of about 2 minutes. While loaded 
    in `tools/ollama-proxy.py`, which rewrites the Host header:
    `pythonw tools/ollama-proxy.py 11436 11434` (listen port, Ollama port). On Windows, run
    `powershell -ExecutionPolicy Bypass -File tools\install-proxy-autostart.ps1` once: it copies the proxy to
-   `%LOCALAPPDATA%\UseItUp`, starts it at every login and restarts it within ~5 s if it ever stops.
+   `%USERPROFILE%\UseItUp`, starts it at every login and restarts it within ~5 s if it ever stops.
 3. Point Tailscale at the proxy. Use a **path** so you don't overwrite anything you already serve on :443:
    `tailscale serve --bg --set-path /ollama http://127.0.0.1:11436`
 4. In the app's **More** tab set the Ollama address to `https://<your-pc>.<tailnet>.ts.net/ollama` and tap
@@ -57,7 +57,7 @@ Without any of this, everything else (pantry, scanning, TheMealDB recipes) still
 By default each phone keeps its own pantry in its browser storage. To share one pantry, run the tiny sync server on the PC
 (`tools/sync-server.py`, standard-library Python, loopback only) behind the same Tailscale proxy:
 
-1. `powershell -ExecutionPolicy Bypass -File tools\install-sync-autostart.ps1` (installs to `%LOCALAPPDATA%\UseItUp`,
+1. `powershell -ExecutionPolicy Bypass -File tools\install-sync-autostart.ps1` (installs to `%USERPROFILE%\UseItUp`,
    starts at login, restarts itself; pantry data is a small JSON file in `%USERPROFILE%\UseItUpData`).
 2. `tailscale serve --bg --set-path /sync http://127.0.0.1:11437`
 3. On phone 1: **More → Shared pantry**, address `https://<your-pc>.<tailnet>.ts.net/sync`, tap **New code**, **Save & sync**.
@@ -68,3 +68,19 @@ By default each phone keeps its own pantry in its browser storage. To share one 
 Items never change after they're added, so merging is a union minus deletions (deletions are remembered for 120 days) — no
 conflicts. Each phone keeps working offline and catches up on the next sync (on open, every minute while open, after each change).
 The pantry code is the only password, so treat it like one; the server is reachable only inside your tailnet.
+More → Shared pantry shows **Last synced: \<time\>**. If syncing has failed for more than 10 minutes, a small ⚠️ warning
+also appears at the top of the Pantry tab.
+
+### Backups
+
+`powershell -ExecutionPolicy Bypass -File tools\install-backup-task.ps1` schedules a daily backup at 21:00. If the PC is
+off at that time, the backup runs as soon as it's back on. It zips `%USERPROFILE%\UseItUpData` into
+`D:\UseItUpBackups\pantry-YYYY-MM-DD.zip` and keeps the newest 14. To restore, run:
+
+    powershell -ExecutionPolicy Bypass -File tools\restore-pantry.ps1               # newest backup
+    powershell -ExecutionPolicy Bypass -File tools\restore-pantry.ps1 -Date 2026-11-24
+    powershell -ExecutionPolicy Bypass -File tools\restore-pantry.ps1 -List
+
+A restore first saves the current data as `pre-restore-<time>.zip`, so you can undo it. The phones merge their own copies
+back in on their next sync. A restore therefore recovers a lost or damaged server file, but it can't bring back an item that
+every phone has already deleted.

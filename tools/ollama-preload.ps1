@@ -13,7 +13,7 @@ param(
   [string]$Ollama = 'http://127.0.0.1:11434',
   [switch]$Once
 )
-$log = Join-Path $env:LOCALAPPDATA 'UseItUp\preload.log'
+$log = Join-Path $env:USERPROFILE 'UseItUp\preload.log'
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content $log }
 
