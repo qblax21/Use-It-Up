@@ -21,6 +21,7 @@ header{background:var(--green);color:#fff;padding:calc(14px + env(safe-area-inse
 .aipill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:rgba(255,255,255,.2);cursor:pointer}
 .aipill:empty{display:none}
 .aipill.offline{background:#c8372d}
+.aipill.warming{background:#e0a100;color:#222}
 #toast{position:fixed;left:50%;bottom:calc(76px + var(--nav-pad));transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
 #toast.show{opacity:1}
 main{max-width:640px;margin:0 auto;padding:12px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left))}
@@ -127,8 +128,11 @@ window.addEventListener('online', syncNow);
 setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
 // firstToken: seconds to wait for the first word before switching to the fallback model. overall: hard cap per call.
 // numCtx: context window sent to Ollama (smaller = less GPU memory; the app's prompts are short). keepAlive: how long Ollama keeps the model loaded.
-// coldGrace: extra seconds allowed when the model isn't in GPU memory yet (loading 5–10 GB from disk can take 30–45 s).
-const getCfg = () => ({ url: 'http://localhost:11434', model: 'qwen2.5:14b', fallback: 'qwen2.5:7b', firstToken: 15, coldGrace: 60, overall: 180, numCtx: 2048, keepAlive: '30m', ...load(CKEY, {}) });
+// coldGrace: extra seconds allowed when the model isn't in GPU memory yet. The models live on a spinning disk (D:):
+// qwen2.5:14b took 112–116 s to load in testing (docs/benchmarks.md), so allow 150 s rather than fall back to the 7b.
+// keepAlive: every request resets Ollama's unload timer to this value, so it must not be shorter than the PC's preloader (4h).
+const getCfg = () => { const c = load(CKEY, {}); if (c.keepAlive === '30m') delete c.keepAlive;   // old default -> new default
+  return { url: 'http://localhost:11434', model: 'qwen2.5:14b', fallback: 'qwen2.5:7b', firstToken: 15, coldGrace: 150, overall: 300, numCtx: 2048, keepAlive: '4h', ...c }; };
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // ---------- dates ----------
@@ -223,7 +227,9 @@ function warm(force = false) {
   if (!force && Date.now() - warmedAt < 5 * 60e3) return;
   warmedAt = Date.now();
   const { url, model, keepAlive, numCtx } = getCfg();
-  fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: keepAlive, ...(numCtx ? { options: { num_ctx: numCtx } } : {}) }) }).catch(() => { warmedAt = 0; });
+  loadedModels().then(l => { if (l && !l.includes(model)) setWarming(true); });   // only show "warming" if it really is cold
+  fetch(url.replace(/\/+$/, '') + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: keepAlive, ...(numCtx ? { options: { num_ctx: numCtx } } : {}) }) })
+    .then(r => { setWarming(false, r.ok); }).catch(() => { warmedAt = 0; setWarming(false); });
 }
 // Which models Ollama currently has in GPU memory (null if it can't be asked).
 async function loadedModels() {
@@ -241,8 +247,10 @@ async function llmCore(prompt, max = 900, json = false) {
   const loaded = await loadedModels();
   const grace = name => (loaded && !loaded.includes(name)) ? coldGrace : 0;
   onAiPhase && onAiPhase(grace(model) ? 'loading' : 'thinking');
-  try { return await llmOnce(model, prompt, max, firstToken + grace(model), json); }
+  if (grace(model)) setWarming(true);
+  try { const t = await llmOnce(model, prompt, max, firstToken + grace(model), json); setWarming(false, true); return t; }
   catch (e) {
+    setWarming(false);
     if (!e.retry || !fallback || fallback === model) throw e;
     try { onAiPhase && onAiPhase(grace(fallback) ? 'loading' : 'thinking'); const t = await llmOnce(fallback, prompt, max, firstToken * 2 + grace(fallback), json); lastFallbackWhy = e.message; return t; }
     catch (e2) { throw Object.assign(new Error(`${e.message}; fallback ${fallback} also failed: ${e2.message}`), { fatal: e.fatal || e2.fatal, status: e2.status ?? e.status }); }
@@ -255,11 +263,17 @@ async function llm(prompt, max = 900, json = false) {
 }
 
 // ---------- AI availability: offline state, background retry, automatic switch back ----------
-const ai = { state: 'unknown', hint: '', retryMs: 15000, timer: null };
+const ai = { state: 'unknown', hint: '', retryMs: 15000, timer: null, warming: false };
 function paintAiPill() {
   const el = $('aipill'); if (!el) return;
-  el.textContent = ai.state === 'online' ? 'AI ●' : ai.state === 'offline' ? 'AI offline' : '';
-  el.className = 'aipill ' + ai.state;
+  const warming = ai.warming && ai.state !== 'offline';
+  el.textContent = warming ? 'AI warming up…' : ai.state === 'online' ? 'AI ●' : ai.state === 'offline' ? 'AI offline' : '';
+  el.className = 'aipill ' + (warming ? 'warming' : ai.state);
+}
+// "Warming up" = the PC is loading the model from disk (up to ~2 min). That's not an error, so say so.
+function setWarming(on, ready = false) {
+  const was = ai.warming; ai.warming = on; paintAiPill();
+  if (was && !on && ready) toast('✅ AI is warmed up and ready');
 }
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.className = 'show'; clearTimeout(toast.t); toast.t = setTimeout(() => { t.className = ''; }, 4000); }
 function setAi(ok, hint = '') {
@@ -418,12 +432,14 @@ function viewAdd() {
     sync(); if (!draft.name.trim()) { $('msg').textContent = 'Enter a name first.'; return; }
     if (ai.state === 'offline') { $('msg').textContent = 'AI is offline right now (it will reconnect on its own). Pick a date with the quick buttons for now.'; return; }
     $('msg').textContent = 'Asking your AI…';
+    onAiPhase = p => { if ($('msg')) $('msg').textContent = p === 'loading' ? '⏳ Warming up AI… your PC is loading the model (can take about 2 minutes the first time).' : 'Asking your AI…'; };
     try {
       const t = await llm(`How many days will "${draft.name}" stay safe to eat ${draft.leftover ? 'as a cooked leftover in the fridge' : 'when bought fresh and stored properly (in the fridge if it needs it)'}? Be conservative. Reply with only a whole number of days, nothing else.`, 20);
       const n = parseInt(t.match(/\d+/)?.[0], 10);
       if (!n || n > 400) throw new Error('No clear answer');
       $('exp').value = draft.expires = addDays(n); $('msg').textContent = `Estimate: about ${n} days (${lastModel}). Adjust if the package says otherwise.`;
-    } catch (e) { $('msg').textContent = 'AI error: ' + e.message; }
+    } catch (e) { if ($('msg')) $('msg').textContent = 'AI error: ' + e.message; }
+    finally { onAiPhase = null; }
   };
   $('save').onclick = () => {
     sync();
@@ -653,13 +669,19 @@ async function viewRecipes() {
     const out = $('aiout');
     if (!items.some(isFresh)) { out.textContent = 'Everything in your pantry has expired — nothing safe to cook with.'; return; }
     out.textContent = 'Thinking…';
-    onAiPhase = p => { if (!aiRecipes.length || out.textContent.endsWith('…')) out.textContent = p === 'loading' ? 'Loading the AI model into GPU memory — the first use after a while can take up to a minute…' : 'Thinking…'; };
+    let tick = 0; const stopTick = () => { clearInterval(tick); onAiPhase = null; };
+    onAiPhase = p => { clearInterval(tick);
+      if (p !== 'loading') { out.textContent = 'Thinking…'; return; }
+      const t0 = Date.now(), upd = () => { out.innerHTML = `<b>⏳ Warming up AI…</b><div class="muted">Your PC is loading ${esc(getCfg().model)} from its hard drive. The first use after a break can take about 2 minutes; after that answers take a few seconds. (${Math.round((Date.now() - t0) / 1000)} s)</div>`; };
+      upd(); tick = setInterval(upd, 1000); };
     try {
       const t0 = performance.now();
       const { val, retried } = await llmJSON(recipePrompt(), 400, normalizeRecipes);
+      stopTick();
       aiRecipes = val; window.lastRecipeStats = { secs: (performance.now() - t0) / 1000, retried };
       out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}${lastFallbackWhy ? ' · used the fallback model because ' + esc(lastFallbackWhy) : ''}</div>`; wireSteps();
     } catch (e) {
+      stopTick();
       out.innerHTML = `${esc(e.message)} ${e.raw ? '<details><summary class="muted">Show raw reply</summary><div class="ai muted">' + md(e.raw) + '</div></details>' : ''}`;
     }
   };
@@ -768,7 +790,7 @@ function viewMore() {
   };
   $('creset').onclick = () => { try { localStorage.removeItem(CKEY); } catch (e) {} viewMore(); };
   $('diagrun').onclick = runDiagnostics;
-  $('diagload').onclick = () => { warm(true); $('diagout').insertAdjacentHTML('afterbegin', '<p class="muted">Asked Ollama to load the model — a cold start can take 30–45 s. Run the checks again in a moment.</p>'); };
+  $('diagload').onclick = () => { warm(true); $('diagout').insertAdjacentHTML('afterbegin', '<p class="muted">Asked Ollama to load the model — a cold start can take about 2 minutes. Run the checks again in a moment.</p>'); };
   $('diagcopy').onclick = async () => {
     const t = window.lastDiagText || 'Run the checks first.';
     try { await navigator.clipboard.writeText(t); $('diagcopy').textContent = 'Copied ✓'; } catch (e) { $('diagout').insertAdjacentHTML('beforeend', `<textarea style="width:100%;height:140px" readonly>${esc(t)}</textarea>`); }
@@ -819,7 +841,7 @@ async function runDiagnostics() {
       const r = await (await fetch(url + '/api/ps')).json().catch(() => null), m = (r?.models || []).find(x => x.name === cfg.model);
       ctx.loaded = !!m;
       return m ? ['pass', `${m.name}: ${(m.size_vram / 1e9).toFixed(1)} GB in GPU, context ${m.context_length}${m.expires_at ? ', stays loaded until ' + new Date(m.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}.`]
-        : ['warn', `${cfg.model} isn't in GPU memory right now.`, 'That\'s fine: the first request loads it (30–45 s when it comes from a hard drive). Tap "Load model now", or just open the Recipes tab.'];
+        : ['warn', `${cfg.model} isn't in GPU memory right now.`, 'That\'s fine: the first request loads it (about 2 minutes, because the models are on a hard drive). Tap "Load model now", or just open the Recipes tab.'];
     }],
     ['6. Timed test generation', async () => {
       try {

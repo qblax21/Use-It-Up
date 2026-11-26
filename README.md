@@ -22,11 +22,16 @@ Recipe ideas and shelf-life estimates use [Ollama](https://ollama.com) on your o
 No API key, nothing leaves your network. Defaults: `http://localhost:11434`, main model `qwen2.5:14b`,
 fallback `qwen2.5:7b`. Replies are streamed. If the main model errors, runs out of memory, or sends no first
 word within 15 s (when it's already loaded in GPU memory), the app retries once with the fallback. A model that still
-has to be loaded from disk gets 60 extra seconds first (a cold load takes 30–45 s on a hard drive), because switching to
-a fallback that is also cold would be slower. Requests use a 2048-token context window and ask Ollama to keep the model
-loaded for 30 minutes; the model is also pre-loaded when you open the Recipes tab. All of these are editable under
-**More** (a web page can't read environment variables, so they live in settings).
-**Tip:** keep the Ollama model folder on an SSD — cold starts are much faster than from a hard drive.
+has to be loaded from disk gets 150 extra seconds first, because qwen2.5:14b takes about 2 minutes to load from the D: hard
+disk and switching to a fallback that is also cold would be slower. Meanwhile the app shows **AI warming up…**. Requests
+use a 2048-token context window and ask Ollama to keep the model loaded for 4 hours. The model is also pre-loaded when you
+open the Recipes tab. All of these are editable under **More** (a web page can't read environment variables, so they
+live in settings). Timings and quality: [docs/benchmarks.md](docs/benchmarks.md).
+
+**Warm at login (recommended):** run `powershell -ExecutionPolicy Bypass -File tools\install-preload-autostart.ps1` once.
+It loads qwen2.5:14b into GPU memory at every login and again at 11:30 and 16:30 if it was unloaded, so the first request
+from a phone takes well under a second instead of about 2 minutes. While loaded it holds about 9 GB of the 12 GB GPU; run
+`ollama stop qwen2.5:14b` to free it. Log: `%LOCALAPPDATA%\UseItUp\preload.log`.
 
 **On the PC itself** it works as-is (Chrome/Edge allow the HTTPS page to call `localhost`).
 
@@ -53,11 +58,12 @@ By default each phone keeps its own pantry in its browser storage. To share one 
 (`tools/sync-server.py`, standard-library Python, loopback only) behind the same Tailscale proxy:
 
 1. `powershell -ExecutionPolicy Bypass -File tools\install-sync-autostart.ps1` (installs to `%LOCALAPPDATA%\UseItUp`,
-   starts at login, restarts itself; pantry data is a small JSON file in `%LOCALAPPDATA%\UseItUp\sync-data`).
+   starts at login, restarts itself; pantry data is a small JSON file in `%USERPROFILE%\UseItUpData`).
 2. `tailscale serve --bg --set-path /sync http://127.0.0.1:11437`
 3. On phone 1: **More → Shared pantry**, address `https://<your-pc>.<tailnet>.ts.net/sync`, tap **New code**, **Save & sync**.
-   On phone 2 (must be on the same tailnet, or have the PC shared to it): enter the same address and code. The invite link
-   works too if opened inside the app.
+   On phone 2 (must be on the same tailnet, or have the PC shared to it): open the invite link from phone 1
+   (**Copy invite link**) and tap **Join** on the card that appears, or enter the same address and code by hand.
+   To test with two phones, use [docs/two-phone-test.md](docs/two-phone-test.md).
 
 Items never change after they're added, so merging is a union minus deletions (deletions are remembered for 120 days) — no
 conflicts. Each phone keeps working offline and catches up on the next sync (on open, every minute while open, after each change).

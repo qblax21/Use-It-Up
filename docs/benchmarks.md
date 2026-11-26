@@ -49,6 +49,24 @@ It used 5 fixed pantries and ran each prompt 3 times per model, for 15 replies p
 - **The real cost is the cold start.** D: is a spinning hard disk, so loading 9 GB takes about 112 s (14b) versus 41 s (7b). The app allows 15 + 60 s on a cold start before switching to the fallback, so the first request after the model has been unloaded **would currently time out on 14b and fall back to 7b**. See *Cold start* below.
 - **Prompt issue (not fixed here).** Both models read "no eggs, onions, cheese… unless listed" as "avoid eggs and cheese" even when they *are* listed: see the breakfast row. Rewording that rule should improve quality more than switching models would.
 
-## Cold start (item 3)
+## Cold start
 
-See the "Cold start" section added below once measured.
+The models stay on D:. All measurements below are of qwen2.5:14b with `num_ctx` 2048, asking for one short answer.
+
+| Situation | First token | Notes |
+|---|---|---|
+| **Before:** model not in GPU memory, read from the D: hard disk | **112 s** (bench run), **116 s** (repeat run 10 min later) | Longer than the app's old 15 + 60 s cold allowance, so the app gave up on 14b and loaded the 7b instead. That meant another 41 s load, and evicting the 14b. |
+| Model not in GPU memory, file still in Windows' file cache | 2–4 s | Happens sometimes (the preloader's load took 4 s and the app's test took 2 s). You can't rely on it: the 116 s run above happened 10 minutes after a read. |
+| **After:** preloaded at login (`tools\ollama-preload.ps1`) | **0.3 s** (total 0.4 s) | The model is already in GPU memory when the phone asks. |
+
+**What changed**
+- **Preload at login:** `tools\install-preload-autostart.ps1` puts `UseItUp-Preload.vbs` in the Startup folder. After login it waits for Ollama and loads qwen2.5:14b with `keep_alive` 4h. It also reloads at **11:30 and 16:30** if the model was unloaded, so it's warm before lunch and dinner. Log: `%LOCALAPPDATA%\UseItUp\preload.log`.
+- **keep_alive 4h (was 30m):** every request resets Ollama's unload timer to *that request's* keep_alive. I saw this in testing: a test request with `5m` cut the preloader's 4 h down to 5 minutes. So the app's default is now `4h`. Phones that had the old default `30m` saved are moved to 4h automatically. Any other value someone typed in is kept.
+- **Longer cold allowance:** `coldGrace` went from 60 s to 150 s and the per-call cap from 180 s to 300 s. A cold 14b now waits about 2 minutes instead of falling back to a 7b that also has to load from disk.
+- **"Warming up AI…" state:** when the model isn't loaded, the header pill shows an amber **AI warming up…**. The Recipes card shows **⏳ Warming up AI…** with a seconds counter, and a toast says **AI is warmed up and ready** when it's done. The shelf-life button shows the same message.
+
+**VRAM tradeoff (12 GB RTX 3060)**
+- qwen2.5:14b at `num_ctx` 2048 uses **9.1 GB**. With Windows and the desktop using about 1.3 GB, about **1.7 GB is left** while it is loaded (`nvidia-smi` showed 10.4 / 12.3 GB used).
+- That's fine for browsing and video. Anything else that wants the GPU while the model is loaded (games, Demucs, other AI tools) will be short of memory and may fail or crawl. To free the GPU: `ollama stop qwen2.5:14b` (it reloads at the next use or the next warm-up time).
+- The 14b and 7b **can't both be in GPU memory** (9.1 + 4.6 GB > 12 GB). Using the fallback evicts the 14b, so the next 14b request is cold again. That's another reason to wait for the 14b rather than fall back quickly.
+- **Why 4h and not `-1` (forever):** `-1` would make cold starts disappear, but it would hold 9 GB of GPU memory permanently. 4 h plus the meal-time reloads covers the times the app is actually used. If you'd rather never wait, set "Keep model loaded for" to `-1` in More → AI helper, and reinstall the preloader with `-KeepAlive -1`.
