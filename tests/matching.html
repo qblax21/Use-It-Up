@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Use It Up: matching tests</title>
+<style>
+  :root { --bg: #fff; --ink: #222; --ok: #2f7d4f; --bad: #c8372d; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161814; --ink: #eee; } }
+  body { font: 15px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--ink); margin: 16px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1 id="sum">Running…</h1>
+<ol id="out"></ol>
+<!-- Pure functions only: this page never touches the app's saved pantry. Open it from the site or a local server. -->
+<script src="../match.js"></script>
+<script>
+const fresh = (name, days = 5) => ({ id: name, name, expiresIn: days });
+const isFresh = it => it.expiresIn >= 0;
+const rule = (kind, ing, item) => ({ id: kind + ':' + ing, kind, ing: matchKey(ing), item: matchKey(item) });
+const results = [];
+function eq(title, got, want) { results.push({ title, ok: got === want, got, want }); }
+
+// ---- 3 example household rules (the feature under test) ----
+// 1. alias: "parmigiano" counts as the pantry's "Parmesan"
+{
+  const pantry = [fresh('Parmesan')];
+  eq('alias 1: "parmigiano" without a rule is missing', checkIngredientIn('parmigiano', pantry, [], isFresh), 'missing');
+  const rules = [rule('alias', 'Parmigiano', 'Parmesan')];
+  eq('alias 1: "parmigiano" with the rule is in the pantry', checkIngredientIn('parmigiano', pantry, rules, isFresh), 'have');
+  eq('alias 1: rule ignores case and amounts ("1/2 cup grated Parmigiano")', checkIngredientIn('1/2 cup grated Parmigiano', pantry, rules, isFresh), 'have');
+  eq('alias 1: rule follows the item, not the exact name ("Parmesan cheese")', checkIngredientIn('parmigiano', [fresh('Parmesan cheese')], rules, isFresh), 'have');
+  eq('alias 1: an expired Parmesan shows as expired, not have', checkIngredientIn('parmigiano', [fresh('Parmesan', -2)], rules, isFresh), 'expired');
+}
+// 2. exclusion: "pepper" in a recipe means the spice, not the pantry's "Bell pepper"
+{
+  const pantry = [fresh('Bell pepper'), fresh('Red bell pepper')];
+  eq('not 2: "pepper" without a rule wrongly matches Bell pepper', checkIngredientIn('pepper', pantry, [], isFresh), 'have');
+  const rules = [rule('not', 'pepper', 'Bell pepper')];
+  eq('not 2: with the rule, "pepper" is a staple instead', checkIngredientIn('pepper', pantry, rules, isFresh), 'staple');
+  eq('not 2: the rule also covers "Red bell pepper"', findItemIn('pepper', [fresh('Red bell pepper')], rules, isFresh), null);
+  eq('not 2: "bell pepper" itself still matches', checkIngredientIn('1 bell pepper, sliced', pantry, rules, isFresh), 'have');
+  eq('not 2: no look-alike hint for the excluded item', nearItemIn('pepper', pantry, rules, isFresh), null);
+}
+// 3. alias across different words: "spring onions" counts as "Green onions"
+{
+  const pantry = [fresh('Green onions')];
+  eq('alias 3: "spring onions" without a rule is only similar', checkIngredientIn('spring onions', pantry, [], isFresh), 'similar');
+  const rules = [rule('alias', 'spring onions', 'Green onions')];
+  eq('alias 3: with the rule, "spring onions" is in the pantry', checkIngredientIn('spring onions', pantry, rules, isFresh), 'have');
+  eq('alias 3: singular "spring onion" uses the same rule', checkIngredientIn('spring onion', pantry, rules, isFresh), 'have');
+  eq('alias 3: the rule doesn\'t leak to other onions ("red onion")', checkIngredientIn('red onion', pantry, rules, isFresh), 'similar');
+  eq('alias 3: no matching pantry item -> still missing', checkIngredientIn('spring onions', [fresh('Rice')], rules, isFresh), 'missing');
+}
+
+// ---- existing matching behaviour (regression checks) ----
+eq('base: chicken broth is not chicken breast', checkIngredientIn('chicken broth', [fresh('Chicken breast')], [], isFresh), 'similar');
+eq('base: garlic is not garlic powder', checkIngredientIn('garlic', [fresh('Garlic powder')], [], isFresh), 'similar');
+eq('base: generic Chicken covers chicken thighs', checkIngredientIn('chicken thighs', [fresh('Chicken')], [], isFresh), 'have');
+eq('base: scallions = green onion (built-in synonym)', checkIngredientIn('scallions', [fresh('Green onion')], [], isFresh), 'have');
+eq('base: "[cooked leftover]" tag from the AI is ignored', checkIngredientIn('roast chicken [cooked leftover]', [fresh('Leftovers: roast chicken')], [], isFresh), 'have');
+eq('base: "Ground beef: 0 days left" from the AI is ignored', checkIngredientIn('Ground beef: 0 days left', [fresh('Ground beef', 0)], [], isFresh), 'have');
+eq('base: salt is a staple', checkIngredientIn('salt', [], [], isFresh), 'staple');
+
+const bad = results.filter(r => !r.ok);
+document.getElementById('out').innerHTML = results.map(r => `<li class="${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} ${r.title}${r.ok ? '' : ` (got ${JSON.stringify(r.got)}, expected ${JSON.stringify(r.want)})`}</li>`).join('');
+document.getElementById('sum').textContent = bad.length ? `FAIL: ${bad.length} of ${results.length}` : `PASS: ${results.length} of ${results.length}`;
+document.title = document.getElementById('sum').textContent;
+window.testResults = { passed: results.length - bad.length, failed: bad.length, failures: bad };
+</script>
+</body>
+</html>

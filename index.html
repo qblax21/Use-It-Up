@@ -56,6 +56,9 @@ video{width:100%;border-radius:12px;background:#000}
 .sum div{margin:3px 0}
 #joinbox{max-width:640px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left))}
 .card.join{border:2px solid var(--green)}
+.ingb{font:inherit;color:inherit;background:none;border:0;padding:2px 0;text-decoration:underline dotted;text-underline-offset:3px;cursor:pointer}
+#fixbox{position:fixed;left:0;right:0;bottom:calc(56px + var(--nav-pad));z-index:15;max-width:640px;margin:0 auto;padding:0 12px}
+.card.fix{border:2px solid var(--amber);box-shadow:0 -4px 18px rgba(0,0,0,.25)}
 .syncwarn{background:#fff3cd;color:#5c4400;border-radius:10px;padding:6px 10px;margin:6px 0;font-size:13px;cursor:pointer}
 </style>
 </head>
@@ -64,6 +67,7 @@ video{width:100%;border-radius:12px;background:#000}
 <div id="toast"></div>
 <div id="soon" class="hide" role="button" tabindex="0"></div>
 <div id="joinbox"></div>
+<div id="fixbox"></div>
 <main id="main"></main>
 <nav>
   <button data-t="list">Pantry</button>
@@ -72,6 +76,7 @@ video{width:100%;border-radius:12px;background:#000}
   <button data-t="more">More</button>
 </nav>
 
+<script src="match.js"></script>
 <script>
 // ---------- storage ----------
 const KEY = 'useitup.items.v1', HKEY = 'useitup.hist.v1', CKEY = 'useitup.llm';
@@ -82,7 +87,11 @@ const TKEY = 'useitup.tomb', SKEY = 'useitup.sync';
 let tomb = load(TKEY, {});   // ids of deleted items -> time deleted (so a deletion on one phone reaches the others)
 const newId = () => Math.random().toString(36).slice(2, 9) + Math.random().toString(36).slice(2, 9);
 hist = hist.map(h => h.id ? h : { ...h, id: newId() });
-const saveLocal = () => { put(KEY, items); put(HKEY, hist); put(TKEY, tomb); };
+// The household's ingredient-match fixes ("parmigiano counts as parmesan", "pepper is not bell pepper"). Synced like items:
+// each rule is immutable with an id; removing one leaves a tombstone.
+const RKEY = 'useitup.rules';
+let rules = load(RKEY, []);
+const saveLocal = () => { put(KEY, items); put(HKEY, hist); put(TKEY, tomb); put(RKEY, rules); };
 const save = () => { saveLocal(); scheduleSync(); };
 
 // ---------- shared pantry sync (small server on your PC; see tools/sync-server.py) ----------
@@ -103,7 +112,7 @@ function whenStr(t) {
 let syncing = false, syncAgain = false, syncTimer = 0;
 const TOMB_KEEP = 120 * 24 * 3600 * 1000;
 function mergeIn(r) {
-  const before = JSON.stringify([items.map(i => i.id).sort(), hist.length]);
+  const before = JSON.stringify([items.map(i => i.id).sort(), hist.length, rules.map(x => x.id).sort()]);
   const now = Date.now(), t = { ...tomb };
   for (const [k, v] of Object.entries(r.tomb || {})) if (typeof v === 'number') t[k] = Math.max(t[k] || 0, v);
   for (const k of Object.keys(t)) if (now - t[k] > TOMB_KEEP) delete t[k];
@@ -111,10 +120,12 @@ function mergeIn(r) {
   for (const i of [...(r.items || []), ...items]) if (i && i.id && !t[i.id] && !im.has(i.id)) im.set(i.id, i);
   const hm = new Map();
   for (const h of [...(r.hist || []), ...hist]) if (h && h.id && !hm.has(h.id)) hm.set(h.id, h);
-  tomb = t; items = [...im.values()]; hist = [...hm.values()].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const remoteIds = new Set((r.items || []).map(i => i.id));
-  const extra = items.some(i => !remoteIds.has(i.id)) || (r.hist || []).length < hist.length;
-  return { changed: before !== JSON.stringify([items.map(i => i.id).sort(), hist.length]), extra };
+  const rm = new Map();
+  for (const x of [...(r.rules || []), ...rules]) if (x && x.id && !t[x.id] && !rm.has(x.id)) rm.set(x.id, x);
+  tomb = t; items = [...im.values()]; hist = [...hm.values()].sort((a, b) => (a.date || '').localeCompare(b.date || '')); rules = [...rm.values()];
+  const remoteIds = new Set((r.items || []).map(i => i.id)), remoteRules = new Set((r.rules || []).map(x => x.id));
+  const extra = items.some(i => !remoteIds.has(i.id)) || (r.hist || []).length < hist.length || rules.some(x => !remoteRules.has(x.id));
+  return { changed: before !== JSON.stringify([items.map(i => i.id).sort(), hist.length, rules.map(x => x.id).sort()]), extra };
 }
 function scheduleSync() { if (!syncCfg()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 700); }
 async function syncNow() {
@@ -123,7 +134,7 @@ async function syncNow() {
   syncing = true; sync.status = 'busy';
   const ac = new AbortController(), to = setTimeout(() => ac.abort(), 10000);
   try {
-    const res = await fetch(c.url.trim().replace(/\/+$/, '') + '/' + encodeURIComponent(c.code), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ items, hist, tomb }), signal: ac.signal });
+    const res = await fetch(c.url.trim().replace(/\/+$/, '') + '/' + encodeURIComponent(c.code), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ items, hist, tomb, rules }), signal: ac.signal });
     if (!res.ok) throw new Error(res.status === 400 ? 'the pantry code looks wrong' : res.status === 502 || res.status === 503 ? "the sync server isn't running on the PC" : res.status === 404 ? 'wrong address (it should end in /sync)' : 'server said ' + res.status);
     const r = await res.json(), m = mergeIn(r);
     saveLocal(); sync.status = 'ok'; sync.at = sync.lastOk = Date.now(); sync.msg = ''; sync.failSince = 0; keepSyncState();
@@ -333,7 +344,7 @@ let tab = 'list';
 let draft = { name: '', qty: '', expires: addDays(7), leftover: false, barcode: '' };
 const main = $('main');
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.t));
-function go(t) { stopScan(); tab = t; render(); }
+function go(t) { stopScan(); if ($('fixbox')) $('fixbox').innerHTML = ''; tab = t; render(); }
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
   ({ list: viewList, add: viewAdd, recipes: viewRecipes, more: viewMore })[tab]();
@@ -512,44 +523,11 @@ function matchIngredient(name, list) {
   const phrase = words.join(' ');
   return list.find(i => phrase.includes(i) && i.length > 3) || null;
 }
-// ---- check AI recipe ingredients against the pantry ----
-// Matching rules (see README): an ingredient is "in the pantry" only if every meaningful word of it is part of
-// the pantry item's name (so "chicken broth" != "chicken breast"), AND the pantry item's own form/variety words
-// (powder, sauce, almond, peanut…) also appear in the ingredient (so "garlic" != "garlic powder").
-// Exception: an ingredient may name a cut ("chicken thighs") that a generic pantry item ("Chicken") doesn't specify.
-const SYN = [[/\bscallions?\b/g, 'green onion'], [/\bcilantro\b/g, 'coriander'], [/\bcourgettes?\b/g, 'zucchini'], [/\baubergines?\b/g, 'eggplant'],
-  [/\bcapsicums?\b/g, 'bell pepper'], [/\bchilli\b/g, 'chili'], [/\byoghurt\b/g, 'yogurt'], [/\bgarbanzo( beans?)?\b/g, 'chickpea'], [/\b(stock|bouillon)\b/g, 'broth']];
-const STOP = new Set('whole fresh cooked leftover sliced slice raw ground large small baby organic the and with of boneless skinless chopped diced minced shredded grated frozen canned extra virgin low fat free unsalted salted dried cup tbsp tsp tablespoon teaspoon clove pound lb oz ounce pinch handful can package piece dash bunch head stick medium half optional taste some few plain lean thin thick ripe good quality cut bite size little more for serving about any your favorite leaf cubed crushed peeled trimmed halved rinsed drained melted softened beaten quartered torn mashed sifted toasted steamed boiled warm cold finely roughly thinly freshly splash drizzle sprinkle dollop knob'.split(' '));
-const FORM = new Set('powder broth sauce paste juice flour vinegar oil ketchup jam jelly syrup soup puree extract flake cream seasoning mix cube dressing gravy salsa relish starch zest butter'.split(' '));
-const ALT = new Set('almond coconut soy oat peanut cashew hazelnut sweet sour smoked'.split(' '));
-const CUT = new Set('breast thigh wing drumstick leg fillet loin steak chop rib tender tenderloin shoulder belly roast'.split(' '));
-const sing2 = w => /(us|ss|is)$/.test(w) ? w : w === 'leaves' ? 'leaf' : w.replace(/ies$/, 'y').replace(/oes$/, 'o').replace(/(ch|sh|x|z)es$/, '$1').replace(/s$/, '');
-const words = s => { let t = s.toLowerCase().replace(/\(.*?\)/g, ' '); SYN.forEach(([re, to]) => { t = t.replace(re, to); });
-  return t.split(/[^a-z]+/).filter(w => w.length > 2).map(sing2).filter(w => !STOP.has(w)); };
-function itemMatches(ingW, itemName) {
-  const iw = words(itemName); if (!iw.length || !ingW.length) return false;
-  const itemHasCut = iw.some(w => CUT.has(w));
-  if (ingW.some(w => !iw.includes(w) && !(CUT.has(w) && !itemHasCut))) return false;   // unexplained extra word in the ingredient
-  if (iw.some(w => (FORM.has(w) || ALT.has(w)) && !ingW.includes(w))) return false;   // pantry item is a specific form the ingredient doesn't ask for
-  return ingW.some(w => iw.includes(w));
-}
-function isStaple(s) {
-  s = s.toLowerCase();
-  // "pepper" alone / black / white / cracked / ground pepper is a seasoning; bell, chili, ghost… pepper is a vegetable
-  if (/\b(black|white|cracked|ground|cayenne)\s+pepper\b|\bsalt\s*(and|&)\s*pepper\b|\bpepper\s+flakes?\b|^\W*(\d[\d\/. ]*\s*(tsp|tbsp|teaspoons?|tablespoons?|pinch(es)?)?\s*(of\s+)?)?pepper\W*$/.test(s)) return true;
-  return /(^|\W)(oil|salt|water|spices?|seasoning|paprika|cumin|oregano|thyme|basil|cinnamon|cayenne|turmeric|nutmeg|rosemary|herbs?|garlic powder|onion powder|chili powder|chili flakes?)(\W|$)/.test(s);
-}
+// ---- check recipe ingredients against the pantry (rules live in match.js; the household's own fixes are in `rules`) ----
 const isFresh = i => daysLeft(i.expires) >= 0;
-// -> 'have' | 'expired' | 'staple' | 'similar' (right ingredient, wrong form) | 'missing'
-function checkIngredient(ing) {
-  const w = words(ing);
-  if (!w.length) return 'staple';
-  if (items.some(it => isFresh(it) && itemMatches(w, it.name))) return 'have';
-  if (items.some(it => !isFresh(it) && itemMatches(w, it.name))) return 'expired';
-  if (isStaple(ing)) return 'staple';
-  return nearItem(ing) ? 'similar' : 'missing';
-}
-const nearItem = ing => { const w = words(ing); return items.find(it => isFresh(it) && words(it.name).some(x => w.includes(x))) || null; };
+const checkIngredient = ing => checkIngredientIn(ing, items, rules, isFresh);
+const nearItem = ing => nearItemIn(ing, items, rules, isFresh);
+const findItem = (ing, fresh = true) => findItemIn(ing, items, rules, isFresh, fresh);
 // ---- tolerant parsing of model output ----
 const asList = v => Array.isArray(v) ? v : typeof v === 'string' ? v.split(/\n|;|,(?![^()]*\))/).map(s => s.trim()).filter(Boolean) : [];
 const asText = v => typeof v === 'string' ? v : v && typeof v === 'object' ? (v.name || v.item || v.ingredient || v.text || v.step || v.title || '') : String(v ?? '');
@@ -623,12 +601,45 @@ function renderRecipes() {
     return `<div class="card"><b>${esc(r.name)}</b>
       ${need.length ? `<div class="banner">⚠️ Not on your list — you'd need: <b>${need.map(esc).join('; ')}</b></div>` : expired.length ? '' : '<div class="muted" style="margin:6px 0">✅ Everything is in your pantry (plus basic staples).</div>'}
       ${expired.length ? `<div class="banner" style="background:#f8d7da;color:#721c24">⛔ Uses expired item: <b>${expired.map(esc).join(', ')}</b> — don't use it.</div>` : ''}
-      <div class="muted">${ings.map(([n, s]) => `${icon[s]} ${esc(n)}`).join(' · ')}</div>
+      <div class="muted">${ings.map(([n, s]) => ingBtn(n, `${icon[s]} ${n}`)).join(' · ')}</div>
       <div data-steps="${idx}">${r.steps && r.steps.length
         ? `<ol style="margin:8px 0 0 18px;padding:0">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`
         : `<button class="b alt sm" style="margin-top:8px" data-getsteps="${idx}">Show steps</button>`}</div></div>`;
-  }).join('') + `<div class="muted">✅ in pantry · 🧂 basic staple · ⚠️ not on your list · ⛔ expired</div>`;
+  }).join('') + `<div class="muted">✅ in pantry · 🧂 basic staple · ⚠️ not on your list · ⛔ expired · <b>tap an ingredient if it's matched wrong</b></div>`;
 }
+// ---- "wrong match" / "this counts as X": the household's own match rules ----
+const ingBtn = (ing, label) => `<button class="ingb" data-fix="${esc(ing)}">${esc(label)}</button>`;
+function paintAiRecipes() {
+  if (!$('aiout') || !aiRecipes.length) return;
+  $('aiout').innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}</div>`; wireSteps();
+}
+function refreshMatches() { if (tab !== 'recipes') return; paintAiRecipes(); if ($('ovl') && $('ovl').innerHTML.trim()) $('ovl').innerHTML = overlapSection(); }
+function addRule(kind, ing, itemName) {
+  const r = { id: newId(), kind, ing: matchKey(ing), item: matchKey(itemName), ingLabel: ing.trim(), itemLabel: itemName.trim(), at: Date.now() };
+  if (!r.ing || !r.item) return false;
+  // a new rule replaces an identical or contradicting one for the same ingredient + item
+  for (const x of rules.filter(x => x.ing === r.ing && x.item === r.item)) tomb[x.id] = Date.now();
+  rules = rules.filter(x => !(x.ing === r.ing && x.item === r.item)).concat(r); save(); return true;
+}
+function removeRule(id) { tomb[id] = Date.now(); rules = rules.filter(x => x.id !== id); save(); }
+const ruleText = r => r.kind === 'alias' ? `“${r.ingLabel || r.ing}” counts as “${r.itemLabel || r.item}”` : `“${r.ingLabel || r.ing}” is not “${r.itemLabel || r.item}”`;
+function openFix(ing) {
+  const box = $('fixbox'); if (!matchKey(ing)) return;
+  const st = checkIngredient(ing), hit = findItem(ing) || findItem(ing, false), near = nearItem(ing);
+  const names = [...new Set(items.map(i => i.name))].sort((a, b) => a.localeCompare(b));
+  box.innerHTML = `<div class="card fix"><b>${esc(ing)}</b>
+    <div class="muted">${hit ? `Matched to your <b>${esc(hit.name)}</b>.` : st === 'staple' ? 'Treated as a basic staple (oil, salt, spices…).' : near ? `Not matched. You have <b>${esc(near.name)}</b>, which looks similar.` : 'Not matched to anything in your pantry.'}</div>
+    ${hit ? `<button class="b alt" id="fxnot" style="width:100%;margin-top:8px">✗ Wrong match: ${esc(hit.name)} isn't this</button>` : ''}
+    <label>${hit ? 'Or: it' : 'It'} counts as this pantry item</label>
+    <input id="fxitem" list="fxnames" value="${esc(hit ? '' : near ? near.name : '')}" placeholder="e.g. ${esc(names[0] || 'Parmesan')}" autocapitalize="off"><datalist id="fxnames">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div class="row"><button class="b" id="fxalias">Save</button><button class="b alt" id="fxclose">Cancel</button></div>
+    <div class="muted">Fixes are shared with synced phones. See or undo them in More → Ingredient matches.</div></div>`;
+  $('fxclose').onclick = () => { box.innerHTML = ''; };
+  if ($('fxnot')) $('fxnot').onclick = () => { addRule('not', ing, hit.name); box.innerHTML = ''; toast(`Got it: “${ing}” won't match ${hit.name}`); refreshMatches(); };
+  $('fxalias').onclick = () => { const v = $('fxitem').value.trim(); if (!v) { $('fxitem').focus(); return; }
+    addRule('alias', ing, v); box.innerHTML = ''; toast(`Saved: “${ing}” counts as ${v}`); refreshMatches(); };
+}
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-fix]'); if (b) openFix(b.dataset.fix); });
 async function getSteps(idx) {
   const r = aiRecipes[idx], box = document.querySelector(`[data-steps="${idx}"]`);
   if (!r || !box) return;
@@ -660,7 +671,7 @@ function overlapMatches(limit = 8) {
   return BOOK.map(r => {
     const st = r.ings.map(i => checkIngredient(i));
     const have = r.ings.filter((_, k) => st[k] === 'have'), need = r.ings.filter((_, k) => st[k] !== 'have'), expired = r.ings.filter((_, k) => st[k] === 'expired');
-    const urgency = have.reduce((s, ing) => { const it = items.find(i => isFresh(i) && itemMatches(words(ing), i.name)); return s + (it ? urgencyOf(daysLeft(it.expires)) : 0); }, 0);
+    const urgency = have.reduce((s, ing) => { const it = findItem(ing); return s + (it ? urgencyOf(daysLeft(it.expires)) : 0); }, 0);
     return { ...r, have, need, expired, cover: have.length / r.ings.length, urgency };
   }).filter(r => r.have.length >= 1).sort((a, b) => (b.cover - a.cover) || (b.urgency - a.urgency)).slice(0, limit);
 }
@@ -668,8 +679,9 @@ function overlapSection() {
   const m = overlapMatches();
   if (!m.length) return '<p class="muted">Nothing in the built-in recipe book matches your pantry yet — add a few staples (eggs, pasta, rice, cheese…).</p>';
   return `<p class="muted"><b>Ideas from your pantry</b> — ranked by how many ingredients you already have (no AI, works offline).</p>` + m.map(r => `<div class="card"><b>${esc(r.name)}</b>
-    <div class="muted">You have ${r.have.length} of ${r.ings.length}: ${r.have.map(esc).join(', ')}</div>
-    ${r.need.length ? `<div class="muted">Need: ${r.need.map(esc).join(', ')}</div>` : '<div class="muted">✅ Nothing else needed</div>'}</div>`).join('');
+    <div class="muted">You have ${r.have.length} of ${r.ings.length}: ${r.have.map(i => ingBtn(i, i)).join(', ')}</div>
+    ${r.need.length ? `<div class="muted">Need: ${r.need.map(i => ingBtn(i, i)).join(', ')}</div>` : '<div class="muted">✅ Nothing else needed</div>'}</div>`).join('')
+    + '<p class="muted">Tap an ingredient if it\'s matched wrong.</p>';
 }
 function offlineCard() {
   return `<div class="card" style="border-left:4px solid var(--red)"><b>🔌 AI is offline</b>
@@ -762,6 +774,14 @@ function viewMore() {
     <div class="row"><button class="b alt" id="sinv">Copy invite link</button><button class="b alt" id="soff">Stop syncing</button></div>
     <div id="syncstat" class="muted"></div>
   </div>
+  <div class="card"><b>Ingredient matches</b>
+    <p class="muted">Your fixes for recipe ingredients that were matched wrong (tap an ingredient on the Recipes tab to add one). Shared with synced phones.</p>
+    <div id="rulelist"></div>
+    <label>Recipe ingredient</label><input id="ring" placeholder="e.g. parmigiano" autocapitalize="off">
+    <div class="row" style="margin-top:6px"><select id="rkind"><option value="alias">counts as</option><option value="not">is not</option></select></div>
+    <label>Pantry item</label><input id="ritem" list="rnames" placeholder="e.g. Parmesan" autocapitalize="off"><datalist id="rnames">${[...new Set(items.map(i => i.name))].map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div class="row"><button class="b alt" id="radd">Add</button></div>
+  </div>
   <div class="card"><b>AI helper (Ollama on your PC)</b>
     <p class="muted">Tailored recipes and shelf-life estimates run on your own computer — nothing leaves your network and there's no key. On the PC itself the default address works. On a phone, enter your PC's address (see the README).</p>
     <label>Ollama address</label><input id="curl" value="${esc(getCfg().url)}" autocapitalize="off" autocorrect="off">
@@ -787,6 +807,14 @@ function viewMore() {
   $('nstat').innerHTML = [`Notifications API: ${'Notification' in window ? 'yes' : 'no'}`, `permission: ${'Notification' in window ? Notification.permission : 'n/a'}`, `installed app: ${standalone ? 'yes' : 'no (open it from the Home Screen icon)'}`,
     `service worker: ${'serviceWorker' in navigator ? 'yes' : 'no'}`, `background push: not set up (needs a server)`, `icon badge: ${'setAppBadge' in navigator ? 'yes' : 'no'}`].join(' · ');
   paintSync();
+  const paintRules = () => {
+    $('rulelist').innerHTML = rules.length ? [...rules].sort((a, b) => (a.ingLabel || a.ing).localeCompare(b.ingLabel || b.ing)).map(r => `<div class="item" style="margin:4px 0"><span style="flex:1">${r.kind === 'alias' ? '🔗' : '🚫'} ${esc(ruleText(r))}</span><button class="x" title="Remove" data-rdel="${r.id}">✕</button></div>`).join('') : '<div class="muted">No fixes yet.</div>';
+    $('rulelist').querySelectorAll('[data-rdel]').forEach(b => b.onclick = () => { removeRule(b.dataset.rdel); paintRules(); });
+  };
+  paintRules();
+  $('radd').onclick = () => { const i = $('ring').value.trim(), t = $('ritem').value.trim();
+    if (!i || !t || !addRule($('rkind').value, i, t)) { toast('Enter both an ingredient and a pantry item'); return; }
+    $('ring').value = $('ritem').value = ''; paintRules(); };
   $('snew').onclick = () => { const a = new Uint8Array(24); crypto.getRandomValues(a); $('scode').value = Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join(''); };
   $('ssave').onclick = () => {
     const url = $('surl').value.trim(), code = $('scode').value.trim();

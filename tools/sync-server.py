@@ -6,13 +6,14 @@ Serves the shared pantry for a few phones. Put it behind Tailscale Serve:
     python sync-server.py [listen_port=11437] [data_dir=<next to this file>/sync-data]
 
 API (the "code" is a long random string that acts as both the pantry id and its password):
-    GET  /sync/<code>   -> {"items":[...], "hist":[...], "tomb":{id: ts}}
+    GET  /sync/<code>   -> {"items":[...], "hist":[...], "tomb":{id: ts}, "rules":[...]}
     POST /sync/<code>   body = same shape; merged into the stored pantry, merged result returned.
 
 Merge rules (items never change after they are added, so this is simple and conflict-free):
     * an item exists if it was added on any phone and not deleted on any phone
     * a deletion is remembered as a tombstone {id: ms-timestamp} for 120 days
     * history entries are unioned by id
+    * ingredient-match rules (alias / not) are unioned by id, minus tombstones, like items
 """
 import json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,7 +37,7 @@ def read_state(code):
             s = json.load(f)
     except (OSError, ValueError):
         s = {}
-    return {'items': s.get('items', []), 'hist': s.get('hist', []), 'tomb': s.get('tomb', {})}
+    return {'items': s.get('items', []), 'hist': s.get('hist', []), 'tomb': s.get('tomb', {}), 'rules': s.get('rules', [])}
 
 
 def write_state(code, s):
@@ -62,7 +63,11 @@ def merge(a, b):
     for h in list(a['hist']) + list(b.get('hist') or []):
         if isinstance(h, dict) and isinstance(h.get('id'), str) and h['id'] not in hist:
             hist[h['id']] = h
-    return {'items': list(items.values()), 'hist': list(hist.values()), 'tomb': tomb}
+    rules = {}   # the household's ingredient-match fixes: immutable, removed via tombstones like items
+    for r in list(a.get('rules', [])) + list(b.get('rules') or []):
+        if isinstance(r, dict) and isinstance(r.get('id'), str) and r['id'] not in tomb and r['id'] not in rules:
+            rules[r['id']] = r
+    return {'items': list(items.values()), 'hist': list(hist.values()), 'tomb': tomb, 'rules': list(rules.values())}
 
 
 class H(BaseHTTPRequestHandler):

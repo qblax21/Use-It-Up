@@ -12,6 +12,13 @@ also appear in the ingredient (so *garlic* ≠ *garlic powder*). A generic pantr
 cut (*chicken thighs*). Look-alikes show as ⚠️ with "you have X, but a different form". Expired items are never offered to
 the AI, and any expired item that slips into a recipe is flagged ⛔.
 
+**Fixing a wrong match.** Tap any ingredient on the Recipes tab. If it was matched to the wrong pantry item, tap
+**Wrong match** (for example "pepper" isn't your *Bell pepper*). If it should count as something you have, type or pick that
+item (for example "parmigiano" counts as *Parmesan*). Fixes are saved as household rules, shared with synced phones, and
+listed under **More → Ingredient matches**, where you can remove them or add new ones. Both the AI recipes and the no-AI
+recipe ideas use them. The matching code is in `match.js`. Its tests are in `tests/matching.html` (open it from the site
+or any local server; the tab title shows PASS/FAIL). Server merge tests: `py tests\test_sync_server.py`.
+
 Recipes load in two steps: names + ingredients first (about 3 s), then **Show steps** per recipe on demand.
 The model is pre-loaded when you open the Recipes tab. If the AI's reply isn't usable JSON the app tolerates common
 formatting slips and otherwise retries once automatically.
