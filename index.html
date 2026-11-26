@@ -589,8 +589,14 @@ const acceptSteps = d => { const s = asList(d && !Array.isArray(d) ? (d.steps ||
 function recipePrompt() {
   const lines = items.filter(isFresh).sort((a, b) => a.expires.localeCompare(b.expires))
     .map(i => `- ${i.name}${i.qty ? ' (x' + i.qty + ')' : ''}${i.leftover ? ' [cooked leftover]' : ''}: ${daysLeft(i.expires)} days left`).join('\n');
-  return `Pantry (soonest-expiring first):\n${lines}\n\nSuggest 3 simple meals that use the soonest-expiring items. For a cooked leftover, suggest how to reheat or repurpose it. STRICT RULE: ingredients may only be pantry items above plus oil, salt, pepper, water and common spices — never add anything else (no eggs, onions, cheese, etc. unless listed).\n\nReply with JSON only: {"recipes":[{"name":"...","ingredients":["every ingredient, including staples"]}]}`;
+  // Wording matters (docs/benchmarks.md, "Recipe prompt"): naming foods like eggs or cheese in the rule made the models
+  // either avoid them when listed, or add them when not. So the rule names no foods, and offList/fixPrompt catch the rest.
+  return `Pantry (soonest-expiring first):\n${lines}\n\nSuggest 3 simple, real dishes that use up the soonest-expiring items. All the items listed above are available to cook with, and a dish may combine several of them. For a cooked leftover, suggest how to reheat or repurpose it. Use only the listed items plus oil, salt, black pepper, water and dried spices — nothing else. Write each ingredient as just its name, without quantities, days left or notes.\n\nReply with JSON only: {"recipes":[{"name":"...","ingredients":["every ingredient, including staples"]}]}`;
 }
+// Ingredients the AI used that aren't in the pantry and aren't staples -> [[dish, ingredient]] (the household's match rules apply).
+const offList = recs => recs.flatMap(r => r.ingredients.filter(i => ['missing', 'similar'].includes(checkIngredient(i))).map(i => [r.name, i]));
+// One corrective retry that names exactly what was off-list. Keep in step with fix_prompt() in tools/bench.py.
+const fixPrompt = (text, bad) => text + `\n\nYour previous answer used ingredients that are not in the pantry: ${bad.map(([d, i]) => `${i} (in "${d}")`).join('; ')}. Answer again with 3 dishes that use only the listed items plus oil, salt, black pepper, water and dried spices. Keep any dish that already follows this rule.`;
 let aiRecipes = [];
 function renderRecipes() {
   const icon = { have: '✅', staple: '🧂', similar: '⚠️', missing: '⚠️', expired: '⛔' };
@@ -712,10 +718,16 @@ async function viewRecipes() {
       upd(); tick = setInterval(upd, 1000); };
     try {
       const t0 = performance.now();
-      const { val, retried } = await llmJSON(recipePrompt(), 400, normalizeRecipes);
+      const prompt0 = recipePrompt();
+      let { val, retried } = await llmJSON(prompt0, 400, normalizeRecipes);
       stopTick();
-      aiRecipes = val; window.lastRecipeStats = { secs: (performance.now() - t0) / 1000, retried };
-      out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}${lastFallbackWhy ? ' · used the fallback model because ' + esc(lastFallbackWhy) : ''}</div>`; wireSteps();
+      const bad = offList(val); let adjusted = false;
+      if (bad.length) {   // the AI added things you don't have: ask once more, naming them (keeps the first answer if that fails)
+        out.textContent = `Checking against your pantry: swapping out ${bad.length} ingredient${bad.length > 1 ? 's' : ''} you don't have…`;
+        try { const r2 = await llmJSON(fixPrompt(prompt0, bad), 400, normalizeRecipes); if (offList(r2.val).length < bad.length) { val = r2.val; adjusted = true; } } catch (e) {}
+      }
+      aiRecipes = val; window.lastRecipeStats = { secs: (performance.now() - t0) / 1000, retried, offListFirst: bad.length, adjusted };
+      out.innerHTML = renderRecipes() + `<div class="muted" style="margin-top:8px">— ${esc(lastModel)}${retried ? ' (needed a retry)' : ''}${adjusted ? ' · re-asked once to stick to your pantry' : ''}${lastFallbackWhy ? ' · used the fallback model because ' + esc(lastFallbackWhy) : ''}</div>`; wireSteps();
     } catch (e) {
       stopTick();
       out.innerHTML = `${esc(e.message)} ${e.raw ? '<details><summary class="muted">Show raw reply</summary><div class="ai muted">' + md(e.raw) + '</div></details>' : ''}`;

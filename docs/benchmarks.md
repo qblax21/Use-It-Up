@@ -47,7 +47,33 @@ It used 5 fixed pantries and ran each prompt 3 times per model, for 15 replies p
 - **14b is somewhat better at cooking.** Its meals are more often real dishes, and it repurposes leftovers better. Both models do poorly on awkward pantries.
 - **JSON is reliable.** With `format: json`, every reply was valid JSON. The one unusable 14b reply had a recipe with an empty ingredient list, and the app's built-in retry handles that.
 - **The real cost is the cold start.** D: is a spinning hard disk, so loading 9 GB takes about 112 s (14b) versus 41 s (7b). The app allows 15 + 60 s on a cold start before switching to the fallback, so the first request after the model has been unloaded **would currently time out on 14b and fall back to 7b**. See *Cold start* below.
-- **Prompt issue (not fixed here).** Both models read "no eggs, onions, cheese… unless listed" as "avoid eggs and cheese" even when they *are* listed: see the breakfast row. Rewording that rule should improve quality more than switching models would.
+- **Prompt issue (fixed later, see *Recipe prompt* below).** Both models read "no eggs, onions, cheese… unless listed" as "avoid eggs and cheese" even when they *are* listed: see the breakfast row. The tables above use that original (v1) prompt.
+
+## Recipe prompt (2026-11-25)
+
+The same 5 pantries × 3 runs per model, one row per rule wording. The full texts are in `RULES` in `tools/bench.py`; raw replies are in `docs/bench-raw-prompt-*.json`.
+- *Eggs / cheese used:* breakfast recipes (9 per model) that use the listed eggs or cheese.
+- *Off-list:* recipes (out of about 45) that add an ingredient that is neither in the pantry nor a basic staple.
+
+| Prompt | What it changes | 14b eggs / cheese used | 14b off-list | 7b eggs / cheese used | 7b off-list |
+|---|---|---|---|---|---|
+| v1 (old) | "never add anything else (no eggs, onions, cheese, etc. unless listed)" | 0/9 · 1/9 | 0/46 | 1/9 · 0/9 | 0/45 |
+| v2 | "use any of them freely, including eggs, cheese or milk when they are listed" | 8/9 · 9/9 | **20/45** | 5/9 · 3/9 | 13/45 |
+| v3 | "nothing else counts as a staple (not butter, flour, sugar, eggs, milk, cheese…)" | 2/9 · 0/9 | 1/45 | 3/9 · 0/9 | 10/45 |
+| v4 | names no foods: "all the items listed above are available… use only the listed items plus oil, salt…" | 8/9 · 5/9 | 9/45 | 5/9 · 2/9 | 7/45 |
+| v5 | v4 + "before answering, check every ingredient" | 3/9 · 3/9 | 7/45 | 4/9 · 2/9 | 0/45 |
+| **v4 + re-ask (now in the app)** | v4, then one re-ask if the answer uses something you don't have | **8/9 · 2/9** | **1/45** | 4/9 · 1/9 | 3/45 |
+
+**Findings**
+- **Naming foods in the rule backfires either way.** Telling the model *not* to add eggs or cheese makes it avoid them even when they're listed (v1, v3). Telling it that it *may* use them makes it add them when they aren't listed (v2).
+- **v4 names no foods,** so the model judges from the list itself.
+- **A code check catches what wording can't.** The app runs each answer through the same `checkIngredient()` that draws the ⚠️ marks, including your saved match fixes. If any recipe uses something that isn't in the pantry and isn't a staple, it asks once more, naming exactly those ingredients and dishes. It keeps whichever answer has fewer of them.
+  - The re-ask was needed in 5 of 15 runs for the 14b and 3 of 15 for the 7b, and took off-list ingredients from 9 to 1 (14b) and from 39 to 6 (7b).
+  - Cost: the median reply stays at 3.3 s for the 14b. With a re-ask the worst case was 7.0 s.
+- **The days-left and "[cooked leftover]" tags no longer leak into ingredient names.** The prompt now says "write each ingredient as just its name", and `match.js` strips those tags anyway.
+- Run-to-run variation is real at temperature 0.3: cheese use for the 14b with v4 ranged from 2/9 to 5/9 across two runs. Treat single-digit differences as noise.
+
+**GPU contention.** During the in-app test, the 14b slowed from 34 to 5–9 tokens/s, and a recipe answer took 15–45 s. The cause was another program, QuickTurnSimDemo, using about 90% of the GPU. A 12 GB card can't run a 3D app and the 14b at full speed together.
 
 ## Cold start
 
